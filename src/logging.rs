@@ -78,13 +78,10 @@ fn get_appid(app: &App) -> Option<String> {
     None
 }
 
-/// Create the log directory and choose the log file name (single or rotated).
-pub fn setup_logging(app: &mut App) {
-    let base = config::log_base();
-    let _ = std::fs::create_dir_all(&base);
-
-    // Game name: prefer the current directory basename.
-    let game_name = match std::env::current_dir() {
+/// Derive a human-friendly game name from the current directory, falling back
+/// to the trailing command's basename (extension stripped).
+pub fn derive_game_name(app: &App) -> String {
+    match std::env::current_dir() {
         Ok(dir) if !dir.as_os_str().is_empty() => dir
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -104,76 +101,115 @@ pub fn setup_logging(app: &mut App) {
                 }
             })
             .unwrap_or_default(),
-    };
+    }
+}
 
-    // App ID: Steam env vars first, then command line / appid file.
-    app.appid = env_or("SteamAppId", "");
-    if app.appid.is_empty() {
-        app.appid = env_or("STEAM_APPID", "");
+/// Resolve the Steam App ID from env vars, then the command line / appid file.
+pub fn resolve_appid(app: &App) -> String {
+    for key in ["SteamAppId", "STEAM_APPID", "APPID"] {
+        let v = env_or(key, "");
+        if !v.is_empty() {
+            return v;
+        }
     }
-    if app.appid.is_empty() {
-        app.appid = env_or("APPID", "");
-    }
-    if app.appid.is_empty() {
-        app.appid = get_appid(app).unwrap_or_default();
-    }
+    get_appid(app).unwrap_or_default()
+}
+
+/// Create a per-game log folder and a fresh timestamped log file inside it,
+/// then archive older logs.
+///
+/// Layout: `$HOME/logs/game/<appid-or-name>/<appid name> <timestamp>.log`.
+/// At most [`config::MAX_LOGS`] plain `.log` files are kept per folder; older
+/// ones are compressed to `<name>.tar.gz` and removed.
+pub fn setup_logging(app: &mut App) {
+    let base = config::log_base();
+    let _ = std::fs::create_dir_all(&base);
+
+    let game_name = derive_game_name(app);
+    app.appid = resolve_appid(app);
+    app.game_name = game_name.clone();
 
     let base_filename = if !app.appid.is_empty() {
         format!("{} {}", app.appid, game_name)
     } else {
+        game_name.clone()
+    };
+
+    // One folder per appid (or per process name when there is no appid).
+    let folder_name = if !app.appid.is_empty() {
+        app.appid.clone()
+    } else {
         game_name
     };
+    let folder = base.join(sanitize_component(&folder_name));
+    let _ = std::fs::create_dir_all(&folder);
 
-    if config::SINGLE_LOG {
-        let log_file = base.join(format!("{base_filename}.log"));
-        let _ = std::fs::remove_file(&log_file);
-        let _ = OpenOptions::new().create(true).append(true).open(&log_file);
-        app.log_file = Some(log_file);
-    } else {
-        let date = run_date(&["+%Y%m%d_%H%M%S"]);
-        let log_file = base.join(format!("{base_filename} {date}.log"));
-        if app.logging_level >= 0 {
-            let _ = OpenOptions::new().create(true).append(true).open(&log_file);
-            rotate_logs(&base, &base_filename);
-        }
-        app.log_file = Some(log_file);
-    }
+    let date = run_date(&["+%Y%m%d_%H%M%S"]);
+    let log_file = folder.join(format!("{base_filename} {date}.log"));
+    let _ = OpenOptions::new().create(true).append(true).open(&log_file);
+
+    rotate_and_archive(&folder);
+
+    app.log_file = Some(log_file);
 }
 
-/// Keep only the newest [`config::MAX_LOGS`] timestamped logs for this game.
-fn rotate_logs(base: &Path, base_filename: &str) {
-    let re = match Regex::new(&format!(
-        r"^{} [0-9]{{8}}_[0-9]{{6}}\.log$",
-        regex::escape(base_filename)
-    )) {
-        Ok(re) => re,
-        Err(_) => return,
-    };
+/// Replace path separators so a name can be safely used as a folder component.
+fn sanitize_component(name: &str) -> String {
+    name.replace('/', "_")
+}
 
-    let Ok(entries) = std::fs::read_dir(base) else {
+/// Keep the newest [`config::MAX_LOGS`] `.log` files in `folder`; archive each
+/// older one to `<name>.tar.gz` and remove the original.
+fn rotate_and_archive(folder: &Path) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
         return;
     };
-    let mut matches: Vec<(std::time::SystemTime, PathBuf)> = entries
+    let mut logs: Vec<(std::time::SystemTime, PathBuf)> = entries
         .flatten()
         .filter_map(|e| {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            if re.is_match(&name) {
+            let path = e.path();
+            if path.extension().map(|x| x == "log").unwrap_or(false) {
                 let mtime = e
                     .metadata()
                     .and_then(|m| m.modified())
                     .unwrap_or(std::time::UNIX_EPOCH);
-                Some((mtime, e.path()))
+                Some((mtime, path))
             } else {
                 None
             }
         })
         .collect();
 
-    // Newest first; remove everything past MAX_LOGS.
-    matches.sort_by_key(|m| std::cmp::Reverse(m.0));
-    for (_, path) in matches.into_iter().skip(config::MAX_LOGS) {
-        let _ = std::fs::remove_file(path);
+    // Newest first; archive everything past MAX_LOGS.
+    logs.sort_by_key(|m| std::cmp::Reverse(m.0));
+    for (_, path) in logs.into_iter().skip(config::MAX_LOGS) {
+        archive_log(folder, &path);
+    }
+}
+
+/// Compress a single log into `<name>.tar.gz` next to it, then delete the log.
+///
+/// On any failure the original log is left untouched (no data loss).
+fn archive_log(folder: &Path, log: &Path) {
+    let Some(name) = log.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    let archive = folder.join(format!("{name}.tar.gz"));
+
+    let ok = Command::new("tar")
+        .arg("-czf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(folder)
+        .arg(name)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if ok {
+        let _ = std::fs::remove_file(log);
+    } else {
+        let _ = std::fs::remove_file(&archive);
     }
 }
 
@@ -517,5 +553,41 @@ mod tests {
             &["[0000001.0] boot", "[0000002.0] boot", "[0000003.0] done"],
         );
         assert_eq!(out, vec!["[0000001.0] [x2]  boot", "[0000003.0] done"]);
+    }
+
+    #[test]
+    fn rotation_keeps_three_logs_and_archives_older() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        let dir = std::env::temp_dir().join(format!("game_rot_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Five logs with strictly increasing modification times.
+        let base = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        for i in 0..5u64 {
+            let path = dir.join(format!("log{i}.log"));
+            std::fs::write(&path, format!("content {i}")).unwrap();
+            let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            f.set_modified(base + Duration::from_secs(i)).unwrap();
+        }
+
+        rotate_and_archive(&dir);
+
+        let count_logs = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().map(|x| x == "log").unwrap_or(false))
+            .count();
+        assert_eq!(count_logs, config::MAX_LOGS); // 3 newest kept
+
+        // Oldest two are gone and archived.
+        assert!(!dir.join("log0.log").exists());
+        assert!(!dir.join("log1.log").exists());
+        assert!(dir.join("log2.log").exists());
+        assert!(dir.join("log0.log.tar.gz").exists());
+        assert!(dir.join("log1.log.tar.gz").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

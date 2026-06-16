@@ -192,9 +192,7 @@ pub fn parse_flags(app: &mut App, args: &[String]) -> Result<(), ParseError> {
 
 /// Print usage to stderr and best-effort desktop notification.
 pub fn print_help(prog: &str) {
-    let _ = std::process::Command::new("notify-send")
-        .arg("Invalid Usage, Check your flags")
-        .status();
+    crate::config::notify("Invalid Usage, Check your flags", "");
 
     let onlinefix = ONLINEFIX_DLLS.join(";");
     eprintln!("Usage: {prog} [options] [VAR=VALUE ...] -- %command%");

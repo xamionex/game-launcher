@@ -4,10 +4,9 @@
 
 use std::path::PathBuf;
 
-/// Keep newest N rotated logs (used when `SINGLE_LOG` is false).
-pub const MAX_LOGS: usize = 5;
-/// When true, reuse a single log file per game instead of timestamped rotation.
-pub const SINGLE_LOG: bool = true;
+/// Number of plain `.log` files kept per game folder; older ones are archived
+/// to `.tar.gz` on the next launch.
+pub const MAX_LOGS: usize = 3;
 /// tmpfs mount point used for RAM-disk loading.
 pub const RAM_MOUNT: &str = "/mnt/gameram";
 
@@ -83,6 +82,7 @@ pub struct App {
     pub wayland_enabled: bool,
     pub log_file: Option<PathBuf>,
     pub appid: String,
+    pub game_name: String,
     pub mod_pids: Vec<u32>,
     pub game_dir_orig: Option<String>,
     pub game_dir_ram: Option<String>,
@@ -128,6 +128,7 @@ impl Default for App {
             wayland_enabled: false,
             log_file: None,
             appid: String::new(),
+            game_name: String::new(),
             mod_pids: Vec::new(),
             game_dir_orig: None,
             game_dir_ram: None,
@@ -150,11 +151,20 @@ impl App {
     }
 }
 
-/// Base directory for logs: `$HOME/logs/game.sh`.
-///
-/// Kept as `game.sh` for continuity with existing log history and any external
-/// tooling that reads that path.
+/// Base directory for logs: `$HOME/logs/game`.
 pub fn log_base() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join("logs").join("game.sh")
+    PathBuf::from(home).join("logs").join("game")
+}
+
+/// Send a best-effort desktop notification via `notify-send`.
+///
+/// Silently does nothing if `notify-send` is unavailable.
+pub fn notify(summary: &str, body: &str) {
+    let mut cmd = std::process::Command::new("notify-send");
+    cmd.arg(summary);
+    if !body.is_empty() {
+        cmd.arg(body);
+    }
+    let _ = cmd.status();
 }

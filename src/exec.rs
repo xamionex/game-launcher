@@ -8,8 +8,16 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::Instant;
 
-use crate::config::App;
+use crate::config::{self, App};
 use crate::logging::{self, append_line, log_separator, Compressor};
+
+/// Outcome of attempting to run the launch command.
+enum RunOutcome {
+    /// The command ran; carries its shell-style exit code.
+    Ran(i32),
+    /// The wrapper itself could not start the command (a `game` project error).
+    SpawnFailed(String),
+}
 
 /// Convert an exit status to a shell-style code (128 + signal when killed).
 fn status_code(status: ExitStatus) -> i32 {
@@ -96,14 +104,22 @@ pub fn run_game(app: &mut App) -> i32 {
 
     ignore_signals_in_parent();
 
-    let exit_status = match app.logging_level {
+    let outcome = match app.logging_level {
         -1 => run_direct(app),
         1 => run_verbose(app),
         _ => run_normal(app),
     };
 
+    let exit_status = match &outcome {
+        RunOutcome::Ran(code) => *code,
+        RunOutcome::SpawnFailed(_) => 127,
+    };
+
     if app.logging_level >= 0 {
         if let Some(log) = &log {
+            if let RunOutcome::SpawnFailed(err) = &outcome {
+                append_line(log, &format!("Launch error: {err}"));
+            }
             log_separator(log, '=', "\u{1f6d1} GAME EXITED \u{1f6d1}");
             append_line(log, &format!("Exit Status: {exit_status}"));
         }
@@ -118,11 +134,38 @@ pub fn run_game(app: &mut App) -> i32 {
         }
     }
 
+    notify_on_failure(app, &outcome);
+
     exit_status
 }
 
+/// Notify the user when the game crashed, distinguishing a game crash from a
+/// `game` (wrapper/project) launch failure.
+fn notify_on_failure(app: &App, outcome: &RunOutcome) {
+    let name = if app.game_name.is_empty() {
+        logging::derive_game_name(app)
+    } else {
+        app.game_name.clone()
+    };
+    let name = if name.is_empty() {
+        "the game".to_string()
+    } else {
+        name
+    };
+
+    match outcome {
+        RunOutcome::SpawnFailed(err) => {
+            config::notify("game: launch failed", &format!("Could not start {name}: {err}"));
+        }
+        RunOutcome::Ran(code) if *code != 0 => {
+            config::notify("Game crashed", &format!("{name} exited with code {code}"));
+        }
+        RunOutcome::Ran(_) => {}
+    }
+}
+
 /// Level -1: run with inherited stdio, no capture.
-fn run_direct(app: &App) -> i32 {
+fn run_direct(app: &App) -> RunOutcome {
     let mut command = Command::new(&app.cmd[0]);
     command.args(&app.cmd[1..]);
     command.stdin(Stdio::inherit());
@@ -130,19 +173,19 @@ fn run_direct(app: &App) -> i32 {
     command.stderr(Stdio::inherit());
     set_child_signals(&mut command);
     match command.status() {
-        Ok(status) => status_code(status),
-        Err(_) => 127,
+        Ok(status) => RunOutcome::Ran(status_code(status)),
+        Err(e) => RunOutcome::SpawnFailed(e.to_string()),
     }
 }
 
 /// Level 0: capture, de-duplicate, append to log.
-fn run_normal(app: &App) -> i32 {
+fn run_normal(app: &App) -> RunOutcome {
     let Some(log) = app.log_file.clone() else {
         return run_direct(app);
     };
     let (reader, mut child) = match spawn_merged(&app.cmd) {
         Ok(pair) => pair,
-        Err(_) => return 127,
+        Err(e) => return RunOutcome::SpawnFailed(e.to_string()),
     };
 
     let mut logf = std::fs::OpenOptions::new()
@@ -165,20 +208,20 @@ fn run_normal(app: &App) -> i32 {
     }
 
     match child.wait() {
-        Ok(status) => status_code(status),
-        Err(_) => 1,
+        Ok(status) => RunOutcome::Ran(status_code(status)),
+        Err(_) => RunOutcome::Ran(1),
     }
 }
 
 /// Level 1: capture, prepend elapsed timestamp, tee to terminal, de-duplicate
 /// by message, append to log.
-fn run_verbose(app: &App) -> i32 {
+fn run_verbose(app: &App) -> RunOutcome {
     let Some(log) = app.log_file.clone() else {
         return run_direct(app);
     };
     let (reader, mut child) = match spawn_merged(&app.cmd) {
         Ok(pair) => pair,
-        Err(_) => return 127,
+        Err(e) => return RunOutcome::SpawnFailed(e.to_string()),
     };
 
     let mut tty: Box<dyn Write> = if std::io::stdout().is_terminal() {
@@ -217,8 +260,8 @@ fn run_verbose(app: &App) -> i32 {
     }
 
     match child.wait() {
-        Ok(status) => status_code(status),
-        Err(_) => 1,
+        Ok(status) => RunOutcome::Ran(status_code(status)),
+        Err(_) => RunOutcome::Ran(1),
     }
 }
 
