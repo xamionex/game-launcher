@@ -39,8 +39,8 @@ pub fn determine_wayland_by_gpu(app: &mut App) {
         app.log("Wayland was force disabled");
         app.wayland_enabled = false;
     } else if contains_ci(&info, "NVIDIA") {
-        app.log("Detected NVIDIA: wayland disabled");
-        app.wayland_enabled = false;
+        app.log("Detected NVIDIA: wayland enabled");
+        app.wayland_enabled = true;
     } else {
         app.log("Detected NON-NVIDIA: wayland disabled");
         app.wayland_enabled = false;
