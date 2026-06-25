@@ -185,7 +185,25 @@ pub fn apply_wrappers(app: &mut App) {
     app.cmd = cmd;
 }
 
+/// Merge `fix.so` into an existing `LD_AUDIT` value (colon-separated).
+///
+/// Returns the merged value. If `fix_path` is empty, returns `current` unchanged.
+/// If `current` is empty, returns just `fix_path`.
+fn merge_ld_audit(current: &str, fix_path: &str) -> String {
+    if fix_path.is_empty() {
+        current.to_string()
+    } else if current.is_empty() {
+        fix_path.to_string()
+    } else {
+        format!("{fix_path}:{current}")
+    }
+}
+
 /// Apply the captured custom exports, unsetting variables marked `(empty)`.
+///
+/// After applying exports, if `-F` was set, merge `$HOME/scripts/fix.so` into
+/// `LD_AUDIT` (colon-separated), preserving any value the user set via
+/// `KEY=VALUE` or inherited from the environment.
 pub fn apply_environment_modifications(app: &App) {
     for export in &app.custom_exports {
         if export.value == EMPTY_MARKER {
@@ -193,5 +211,41 @@ pub fn apply_environment_modifications(app: &App) {
         } else {
             std::env::set_var(&export.name, &export.value);
         }
+    }
+
+    if app.fix_audit {
+        let fix_path = std::env::var("HOME")
+            .map(|h| format!("{h}/scripts/fix.so"))
+            .unwrap_or_else(|_| String::new());
+
+        if !fix_path.is_empty() {
+            let current = std::env::var("LD_AUDIT").unwrap_or_default();
+            let merged = merge_ld_audit(&current, &fix_path);
+            std::env::set_var("LD_AUDIT", merged);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_ld_audit_prepends_fix_so() {
+        // Empty current -> just fix.so
+        let result = merge_ld_audit("", "/home/user/scripts/fix.so");
+        assert_eq!(result, "/home/user/scripts/fix.so");
+
+        // Existing value -> prepended with colon
+        let result = merge_ld_audit("/other/lib.so", "/home/user/scripts/fix.so");
+        assert_eq!(result, "/home/user/scripts/fix.so:/other/lib.so");
+
+        // Empty fix path -> no change
+        let result = merge_ld_audit("/existing.so", "");
+        assert_eq!(result, "/existing.so");
+
+        // Both empty -> empty
+        let result = merge_ld_audit("", "");
+        assert_eq!(result, "");
     }
 }

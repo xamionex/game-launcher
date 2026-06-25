@@ -59,6 +59,7 @@ pub struct App {
     pub cleanup_mods_on_exit: bool,
     pub lsfg: bool,
     pub modding_support: bool,
+    pub fix_audit: bool,
 
     // === Valued flags ===
     pub logging_level: i32,
@@ -108,6 +109,7 @@ impl Default for App {
             cleanup_mods_on_exit: false,
             lsfg: false,
             modding_support: false,
+            fix_audit: false,
 
             logging_level: 0,
             instances: 1,

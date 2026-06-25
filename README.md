@@ -93,6 +93,7 @@ Disabled by default (use the flag to enable):
 | `-e` | Kill mod processes on exit |
 | `-f` | Enable LSFG-VK |
 | `-m` | Enable modding support (adds winhttp override) |
+| `-F` | Enable LD_AUDIT with `$HOME/scripts/fix.so` (merges with user-set LD_AUDIT) |
 
 Valued flags:
 

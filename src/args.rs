@@ -87,6 +87,7 @@ fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
         }
         'L' => app.disable_sdl3 = true,
         'R' => app.use_ramdisk = true,
+        'F' => app.fix_audit = true,
         _ => return Err(ParseError::Usage),
     }
     Ok(())
@@ -216,6 +217,7 @@ pub fn print_help(prog: &str) {
     eprintln!("  -e            Cleanup mods on exit");
     eprintln!("  -f            Enable LSFG-VK");
     eprintln!("  -m            Enable modding support (adds winhttp override)");
+    eprintln!("  -F            Enable LD_AUDIT with $HOME/scripts/fix.so (merges with user-set LD_AUDIT)");
     eprintln!();
     eprintln!("== Flags that accept values or lists ==");
     eprintln!("  -l LEVEL      Set logging level (-1: silent, 0: normal, 1: verbose)");
@@ -337,5 +339,13 @@ mod tests {
         let mut app = App::default();
         parse_flags(&mut app, &v(&["-u", "modA", "-u", "modB", "--", "x"])).unwrap();
         assert_eq!(app.mods_to_launch, v(&["modA", "modB"]));
+    }
+
+    #[test]
+    fn fix_audit_flag_enables_ld_audit_merge() {
+        let mut app = App::default();
+        assert!(!app.fix_audit);
+        parse_flags(&mut app, &v(&["-F", "--", "x"])).unwrap();
+        assert!(app.fix_audit);
     }
 }
