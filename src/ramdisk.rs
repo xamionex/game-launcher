@@ -152,7 +152,10 @@ pub fn create_ramdisk(app: &mut App) {
     }
 
     let ram_game_dir = format!("{ramdisk}/{game_name}");
-    ram_log(app, &format!("[RAMDISK] Copying game to RAM: {ram_game_dir}"));
+    ram_log(
+        app,
+        &format!("[RAMDISK] Copying game to RAM: {ram_game_dir}"),
+    );
     let _ = std::fs::create_dir_all(&ram_game_dir);
 
     let _ = Command::new("sudo")
@@ -176,7 +179,10 @@ pub fn create_ramdisk(app: &mut App) {
     app.game_dir_orig = Some(game_dir);
     app.game_dir_ram = Some(ram_game_dir);
 
-    ram_log(app, &format!("[RAMDISK] Setup complete: {game_name} -> RAM"));
+    ram_log(
+        app,
+        &format!("[RAMDISK] Setup complete: {game_name} -> RAM"),
+    );
 }
 
 /// Sync the RAM disk back and unmount it (best effort, with lazy fallback).
@@ -192,7 +198,10 @@ pub fn sync_back_from_ramdisk(app: &App) {
         return;
     }
 
-    ram_log(app, &format!("[RAMDISK] Syncing data and unmounting {ramdisk}..."));
+    ram_log(
+        app,
+        &format!("[RAMDISK] Syncing data and unmounting {ramdisk}..."),
+    );
     let _ = Command::new("sync").status();
 
     unmount(app, ramdisk);
@@ -214,7 +223,10 @@ fn unmount(app: &App, target: &str) {
         ram_log(app, &format!("[RAMDISK] Successfully unmounted {target}"));
         return;
     }
-    ram_log(app, "[RAMDISK] Normal unmount failed, trying lazy unmount...");
+    ram_log(
+        app,
+        "[RAMDISK] Normal unmount failed, trying lazy unmount...",
+    );
     let lazy = Command::new("sudo")
         .args(["umount", "-l", target])
         .status()

@@ -85,7 +85,11 @@ pub fn build_command(app: &mut App) -> Result<(), String> {
             cmd.truncate(idx + 1);
             // Split the replacement on whitespace to allow trailing arguments
             // (parity with the original `IFS=' ' read -ra`).
-            cmd.extend(app.replacement_exe.split_whitespace().map(|s| s.to_string()));
+            cmd.extend(
+                app.replacement_exe
+                    .split_whitespace()
+                    .map(|s| s.to_string()),
+            );
         } else if let Some(last) = cmd.last_mut() {
             *last = app.replacement_exe.clone();
         }
@@ -121,7 +125,8 @@ pub fn get_binary_arch(path: &Path) -> Option<u32> {
     // PE: 'M' 'Z' at start; e_lfanew (u32 LE) at 0x3C points to the PE header,
     // whose Machine field (u16 LE) sits 4 bytes in.
     if data.len() >= 0x40 && &data[0..2] == b"MZ" {
-        let pe_offset = u32::from_le_bytes([data[0x3C], data[0x3D], data[0x3E], data[0x3F]]) as usize;
+        let pe_offset =
+            u32::from_le_bytes([data[0x3C], data[0x3D], data[0x3E], data[0x3F]]) as usize;
         if pe_offset > 0 && pe_offset < 1_048_576 && pe_offset + 6 <= data.len() {
             let machine = u16::from_le_bytes([data[pe_offset + 4], data[pe_offset + 5]]);
             return match machine {
@@ -272,12 +277,7 @@ mod tests {
     #[test]
     fn replacement_exe_after_last_waitforexitandrun() {
         let mut app = App::default();
-        app.original_cmd = v(&[
-            "proton",
-            "waitforexitandrun",
-            "/games/old.exe",
-            "--old-arg",
-        ]);
+        app.original_cmd = v(&["proton", "waitforexitandrun", "/games/old.exe", "--old-arg"]);
         app.isproton = true; // skip runtime stripping
         app.replacement_exe = "/games/new.exe --new".to_string();
 

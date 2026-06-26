@@ -118,7 +118,7 @@ pub fn resolve_appid(app: &App) -> String {
 /// Create a per-game log folder and a fresh timestamped log file inside it,
 /// then archive older logs.
 ///
-/// Layout: `$HOME/logs/game/<appid-or-name>/<appid name> <timestamp>.log`.
+/// Layout: `$HOME/logs/game/<appid name>/<timestamp>.log`.
 /// At most [`config::MAX_LOGS`] plain `.log` files are kept per folder; older
 /// ones are compressed to `<name>.tar.gz` and removed.
 pub fn setup_logging(app: &mut App) {
@@ -136,16 +136,11 @@ pub fn setup_logging(app: &mut App) {
     };
 
     // One folder per appid (or per process name when there is no appid).
-    let folder_name = if !app.appid.is_empty() {
-        app.appid.clone()
-    } else {
-        game_name
-    };
-    let folder = base.join(sanitize_component(&folder_name));
+    let folder = base.join(sanitize_component(&base_filename));
     let _ = std::fs::create_dir_all(&folder);
 
     let date = run_date(&["+%Y%m%d_%H%M%S"]);
-    let log_file = folder.join(format!("{base_filename} {date}.log"));
+    let log_file = folder.join(format!("{date}.log"));
     let _ = OpenOptions::new().create(true).append(true).open(&log_file);
 
     rotate_and_archive(&folder);
@@ -298,12 +293,33 @@ pub fn log_game(app: &App) {
         };
         append_line(log, &format!("Proton Path      : {proton_path}"));
         append_line(log, &format!("Proton Version   : {proton_ver}"));
-        append_line(log, &format!("WINEPREFIX       : {}", env_or("WINEPREFIX", "'(unset)'")));
-        append_line(log, &format!("WINEDLLOVERRIDES : {}", env_or("WINEDLLOVERRIDES", "'(unset)'")));
-        append_line(log, &format!("WINEESYNC        : {}", env_or("WINEESYNC", "'(unset)'")));
-        append_line(log, &format!("WINEFSYNC        : {}", env_or("WINEFSYNC", "'(unset)'")));
-        append_line(log, &format!("WINE_NTSYNC      : {}", env_or("WINE_NTSYNC", "'(unset)'")));
-        append_line(log, &format!("WINEDEBUG        : {}", env_or("WINEDEBUG", "'(unset)'")));
+        append_line(
+            log,
+            &format!("WINEPREFIX       : {}", env_or("WINEPREFIX", "'(unset)'")),
+        );
+        append_line(
+            log,
+            &format!(
+                "WINEDLLOVERRIDES : {}",
+                env_or("WINEDLLOVERRIDES", "'(unset)'")
+            ),
+        );
+        append_line(
+            log,
+            &format!("WINEESYNC        : {}", env_or("WINEESYNC", "'(unset)'")),
+        );
+        append_line(
+            log,
+            &format!("WINEFSYNC        : {}", env_or("WINEFSYNC", "'(unset)'")),
+        );
+        append_line(
+            log,
+            &format!("WINE_NTSYNC      : {}", env_or("WINE_NTSYNC", "'(unset)'")),
+        );
+        append_line(
+            log,
+            &format!("WINEDEBUG        : {}", env_or("WINEDEBUG", "'(unset)'")),
+        );
     }
 
     if !app.custom_exports.is_empty() {
@@ -317,36 +333,112 @@ pub fn log_game(app: &App) {
     }
 
     log_separator(log, '=', "RUNTIME ENVIRONMENT");
-    append_line(log, &format!("LD_PRELOAD        : {}", env_or("LD_PRELOAD", "'(unset)'")));
-    append_line(log, &format!("LD_LIBRARY_PATH   : {}", env_or("LD_LIBRARY_PATH", "'(unset)'")));
-    append_line(log, &format!("DXVK_HUD          : {}", env_or("DXVK_HUD", "'(unset)'")));
-    append_line(log, &format!("VK_INSTANCE_LAYERS: {}", env_or("VK_INSTANCE_LAYERS", "'(unset)'")));
-    append_line(log, &format!("DXVK_LOG_LEVEL    : {}", env_or("DXVK_LOG_LEVEL", "'(unset)'")));
+    append_line(
+        log,
+        &format!("LD_PRELOAD        : {}", env_or("LD_PRELOAD", "'(unset)'")),
+    );
+    append_line(
+        log,
+        &format!(
+            "LD_LIBRARY_PATH   : {}",
+            env_or("LD_LIBRARY_PATH", "'(unset)'")
+        ),
+    );
+    append_line(
+        log,
+        &format!("DXVK_HUD          : {}", env_or("DXVK_HUD", "'(unset)'")),
+    );
+    append_line(
+        log,
+        &format!(
+            "VK_INSTANCE_LAYERS: {}",
+            env_or("VK_INSTANCE_LAYERS", "'(unset)'")
+        ),
+    );
+    append_line(
+        log,
+        &format!(
+            "DXVK_LOG_LEVEL    : {}",
+            env_or("DXVK_LOG_LEVEL", "'(unset)'")
+        ),
+    );
     append_line(log, &format!("MangoHud Enabled  : {}", app.mangohud));
     append_line(log, &format!("GameMode Enabled  : {}", app.gamemode));
-    append_line(log, &format!("vkBasalt Enabled  : {}", env_or("ENABLE_VKBASALT", "false")));
+    append_line(
+        log,
+        &format!("vkBasalt Enabled  : {}", env_or("ENABLE_VKBASALT", "false")),
+    );
 
     log_separator(log, '=', "STEAM / COMPATIBILITY");
     let steam_exe = which("steam")
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "not found".to_string());
-    append_line(log, &format!("Steam App ID           : {}", if app.appid.is_empty() { "'(unset)'".to_string() } else { app.appid.clone() }));
+    append_line(
+        log,
+        &format!(
+            "Steam App ID           : {}",
+            if app.appid.is_empty() {
+                "'(unset)'".to_string()
+            } else {
+                app.appid.clone()
+            }
+        ),
+    );
     append_line(log, &format!("Steam Executable       : {steam_exe}"));
-    append_line(log, &format!("Steam Compat Tool Path : {}", env_or("STEAM_COMPAT_CLIENT_INSTALL_PATH", "'(unset)'")));
-    append_line(log, &format!("Steam Compat Data Path : {}", env_or("STEAM_COMPAT_DATA_PATH", "'(unset)'")));
-    append_line(log, &format!("Steam Runtime          : {}", env_or("STEAM_RUNTIME", "'(unset)'")));
+    append_line(
+        log,
+        &format!(
+            "Steam Compat Tool Path : {}",
+            env_or("STEAM_COMPAT_CLIENT_INSTALL_PATH", "'(unset)'")
+        ),
+    );
+    append_line(
+        log,
+        &format!(
+            "Steam Compat Data Path : {}",
+            env_or("STEAM_COMPAT_DATA_PATH", "'(unset)'")
+        ),
+    );
+    append_line(
+        log,
+        &format!(
+            "Steam Runtime          : {}",
+            env_or("STEAM_RUNTIME", "'(unset)'")
+        ),
+    );
 
     log_separator(log, '=', "SYSTEM INFO");
-    let kernel = Command::new("uname").arg("-r").output().ok()
+    let kernel = Command::new("uname")
+        .arg("-r")
+        .output()
+        .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim_end().to_string())
         .unwrap_or_default();
     append_line(log, &format!("Kernel             : {kernel}"));
-    append_line(log, &format!("Locale             : {}", env_or("LANG", "'(unset)'")));
-    append_line(log, &format!("Desktop Environment: {}", env_or("XDG_CURRENT_DESKTOP", "'(unset)'")));
-    append_line(log, &format!("Session Type       : {}", env_or("XDG_SESSION_TYPE", "'(unset)'")));
+    append_line(
+        log,
+        &format!("Locale             : {}", env_or("LANG", "'(unset)'")),
+    );
+    append_line(
+        log,
+        &format!(
+            "Desktop Environment: {}",
+            env_or("XDG_CURRENT_DESKTOP", "'(unset)'")
+        ),
+    );
+    append_line(
+        log,
+        &format!(
+            "Session Type       : {}",
+            env_or("XDG_SESSION_TYPE", "'(unset)'")
+        ),
+    );
     let wayland_display = env_or("WAYLAND_DISPLAY", "");
     let display = env_or("DISPLAY", "'(none)'");
-    append_line(log, &format!("Display Server     : {wayland_display}{display}"));
+    append_line(
+        log,
+        &format!("Display Server     : {wayland_display}{display}"),
+    );
 
     log_separator(log, '=', "GPU / DRIVER INFO");
     append_line(log, &format!("GPU(s)   : {}", gpu_list()));
@@ -363,11 +455,16 @@ pub fn log_game(app: &App) {
     append_line(log, &format!("Log File: {}", log.to_string_lossy()));
 
     log_separator(log, '=', "PWD");
-    let pwd = std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    let pwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     append_line(log, &format!("Current Directory: {pwd}"));
     if let Ok(prefix) = std::env::var("WINEPREFIX") {
         if !prefix.is_empty() {
-            append_line(log, &format!("Expected Proton log (if enabled): {prefix}/steam-*.log"));
+            append_line(
+                log,
+                &format!("Expected Proton log (if enabled): {prefix}/steam-*.log"),
+            );
         }
     }
 }

@@ -146,7 +146,11 @@ impl App {
     pub fn log(&self, msg: &str) {
         if let Some(path) = &self.log_file {
             use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
                 let _ = writeln!(f, "{msg}");
             }
         }

@@ -99,8 +99,11 @@ fn apply_value_flag(app: &mut App, c: char, value: String) -> Result<(), ParseEr
         // The original does not validate -i; keep it lenient and inert.
         'i' => app.instances = value.parse().unwrap_or(app.instances),
         'l' => {
-            let invalid =
-                || ParseError::Invalid(format!("Invalid log level for -l: {value}. Must be -1, 0, or 1."));
+            let invalid = || {
+                ParseError::Invalid(format!(
+                    "Invalid log level for -l: {value}. Must be -1, 0, or 1."
+                ))
+            };
             let level: i32 = value.parse().map_err(|_| invalid())?;
             if !(-1..=1).contains(&level) {
                 return Err(invalid());
@@ -207,7 +210,6 @@ pub fn print_help(prog: &str) {
     eprintln!("  -L            Disable SDL3 in Steam runtime (sets STEAM_COMPAT_RUNTIME_SDL3=0)");
     eprintln!("  -W            Force Wayland (overrides GPU detection)");
     eprintln!("  -X            Force disable Wayland");
-    eprintln!("  -V            Disable custom vkd3d-proton loading");
     eprintln!();
     eprintln!("== Disabled by default (can be enabled) ==");
     eprintln!("  -s            Enable Gamescope (X11 backend)");
@@ -217,7 +219,10 @@ pub fn print_help(prog: &str) {
     eprintln!("  -e            Cleanup mods on exit");
     eprintln!("  -f            Enable LSFG-VK");
     eprintln!("  -m            Enable modding support (adds winhttp override)");
-    eprintln!("  -F            Enable LD_AUDIT with $HOME/scripts/fix.so (merges with user-set LD_AUDIT)");
+    eprintln!(
+        "  -F            Enable LD_AUDIT with $HOME/scripts/fix.so (merges with user-set LD_AUDIT)"
+    );
+    eprintln!("  -V            Enable custom vkd3d-proton loading (~/Projects/vkd3d-proton/build/vkd3d-proton-master)");
     eprintln!();
     eprintln!("== Flags that accept values or lists ==");
     eprintln!("  -l LEVEL      Set logging level (-1: silent, 0: normal, 1: verbose)");
@@ -259,8 +264,11 @@ mod tests {
     #[test]
     fn positional_assignment_and_command_split() {
         let mut app = App::default();
-        parse_flags(&mut app, &v(&["FLAG=1", "LD_PRELOAD=x.so", "--", "/bin/game", "--arg"]))
-            .unwrap();
+        parse_flags(
+            &mut app,
+            &v(&["FLAG=1", "LD_PRELOAD=x.so", "--", "/bin/game", "--arg"]),
+        )
+        .unwrap();
 
         assert_eq!(app.custom_exports.len(), 2);
         assert_eq!(app.custom_exports[0].name, "FLAG");

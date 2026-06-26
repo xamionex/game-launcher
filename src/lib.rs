@@ -26,10 +26,7 @@ use config::App;
 /// propagates the game's own exit code so Steam observes crashes.
 pub fn run() -> i32 {
     let argv: Vec<String> = std::env::args().collect();
-    let prog = argv
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "game".to_string());
+    let prog = argv.first().cloned().unwrap_or_else(|| "game".to_string());
     let rest: &[String] = if argv.len() > 1 { &argv[1..] } else { &[] };
 
     let mut app = App::default();

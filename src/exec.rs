@@ -155,7 +155,10 @@ fn notify_on_failure(app: &App, outcome: &RunOutcome) {
 
     match outcome {
         RunOutcome::SpawnFailed(err) => {
-            config::notify("game: launch failed", &format!("Could not start {name}: {err}"));
+            config::notify(
+                "game: launch failed",
+                &format!("Could not start {name}: {err}"),
+            );
         }
         RunOutcome::Ran(code) if *code != 0 => {
             config::notify("Game crashed", &format!("{name} exited with code {code}"));
@@ -306,7 +309,10 @@ pub fn run_mods(app: &mut App) {
             );
             append_line(&mod_log, mod_cmd);
             log_separator(&mod_log, '=', "\u{1f4c4} LOG FILE INFO \u{1f4c4}");
-            append_line(&mod_log, &format!("Log File: {}", mod_log.to_string_lossy()));
+            append_line(
+                &mod_log,
+                &format!("Log File: {}", mod_log.to_string_lossy()),
+            );
 
             if let Ok((reader, child)) = spawn_mod(mod_cmd) {
                 let pid = child.id();
