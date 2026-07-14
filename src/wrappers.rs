@@ -1,6 +1,8 @@
 //! Environment setup and command wrapping (gamemode, mangohud, speedhack,
 //! protonhax, gamescope, wezterm) plus Wayland/GPU detection.
 
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::Command;
 
 use crate::config::{App, EMPTY_MARKER};
@@ -52,6 +54,41 @@ fn prepend(prefix: &[&str], cmd: &[String]) -> Vec<String> {
     let mut out: Vec<String> = prefix.iter().map(|s| s.to_string()).collect();
     out.extend_from_slice(cmd);
     out
+}
+
+/// True if `path` is a regular file with an executable bit set.
+fn is_executable(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(meta) => meta.is_file() && (meta.permissions().mode() & 0o111 != 0),
+        Err(_) => false,
+    }
+}
+
+/// True if `program` resolves to an executable, either directly (when it
+/// contains a `/`) or via a `PATH` lookup, like `command -v`.
+fn command_exists(program: &str) -> bool {
+    if program.contains('/') {
+        return is_executable(Path::new(program));
+    }
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| is_executable(&dir.join(program)))
+}
+
+/// Prepend a wrapper only if it is enabled and its binary exists.
+///
+/// When enabled but missing, the wrapper is skipped and the omission is logged.
+fn maybe_wrap(app: &App, cmd: Vec<String>, enabled: bool, program: &str, prefix: &[&str]) -> Vec<String> {
+    if !enabled {
+        return cmd;
+    }
+    if command_exists(program) {
+        prepend(prefix, &cmd)
+    } else {
+        app.log(&format!("Wrapper not found, skipping: {program}"));
+        cmd
+    }
 }
 
 /// Export the global environment and wrap the command with the enabled tools.
@@ -118,69 +155,77 @@ pub fn apply_wrappers(app: &mut App) {
 
     let mut cmd = std::mem::take(&mut app.cmd);
 
-    if app.speedhack {
-        cmd = prepend(&["speedhack"], &cmd);
-    }
-    if app.protonhax {
-        cmd = prepend(&["protonhax", "init"], &cmd);
-    }
+    cmd = maybe_wrap(app, cmd, app.speedhack, "speedhack", &["speedhack"]);
+    cmd = maybe_wrap(app, cmd, app.protonhax, "protonhax", &["protonhax", "init"]);
+
+    // Gamescope has two variants and sets Wayland env vars, so it is handled
+    // outside maybe_wrap but still checks for the binary.
     if app.gamescope_wayland {
-        std::env::set_var("PROTON_ENABLE_WAYLAND", "1");
-        std::env::set_var("PROTON_USE_WAYLAND", "1");
-        cmd = prepend(
-            &[
-                "gamescope",
-                "-r",
-                "165",
-                "--force-grab-cursor",
-                "-w",
-                "1920",
-                "-h",
-                "1080",
-                "-f",
-                "--rt",
-                "--hdr-enabled",
-                "--hdr-itm-enabled",
-                "-S",
-                "stretch",
-                "--backend",
-                "wayland",
-                "--expose-wayland",
-                "--",
-            ],
-            &cmd,
-        );
+        if command_exists("gamescope") {
+            std::env::set_var("PROTON_ENABLE_WAYLAND", "1");
+            std::env::set_var("PROTON_USE_WAYLAND", "1");
+            cmd = prepend(
+                &[
+                    "gamescope",
+                    "-r",
+                    "165",
+                    "--force-grab-cursor",
+                    "-w",
+                    "1920",
+                    "-h",
+                    "1080",
+                    "-f",
+                    "--rt",
+                    "--hdr-enabled",
+                    "--hdr-itm-enabled",
+                    "-S",
+                    "stretch",
+                    "--backend",
+                    "wayland",
+                    "--expose-wayland",
+                    "--",
+                ],
+                &cmd,
+            );
+        } else {
+            app.log("Wrapper not found, skipping: gamescope");
+        }
     } else if app.gamescope {
-        cmd = prepend(
-            &[
-                "gamescope",
-                "-r",
-                "165",
-                "--force-grab-cursor",
-                "-w",
-                "1920",
-                "-h",
-                "1080",
-                "-f",
-                "--rt",
-                "--hdr-enabled",
-                "--hdr-itm-enabled",
-                "-S",
-                "stretch",
-                "--",
-            ],
-            &cmd,
-        );
+        if command_exists("gamescope") {
+            cmd = prepend(
+                &[
+                    "gamescope",
+                    "-r",
+                    "165",
+                    "--force-grab-cursor",
+                    "-w",
+                    "1920",
+                    "-h",
+                    "1080",
+                    "-f",
+                    "--rt",
+                    "--hdr-enabled",
+                    "--hdr-itm-enabled",
+                    "-S",
+                    "stretch",
+                    "--",
+                ],
+                &cmd,
+            );
+        } else {
+            app.log("Wrapper not found, skipping: gamescope");
+        }
     }
-    if app.mangohud {
-        cmd = prepend(&["mangohud"], &cmd);
-    }
-    if app.wezterm {
-        cmd = prepend(&["wezterm", "start", "--cwd", ".", "--"], &cmd);
-    }
-    if app.gamemode {
-        cmd = prepend(&["gamemoderun"], &cmd);
-    }
+
+    cmd = maybe_wrap(app, cmd, app.mangohud, "mangohud", &["mangohud"]);
+    cmd = maybe_wrap(
+        app,
+        cmd,
+        app.wezterm,
+        "wezterm",
+        &["wezterm", "start", "--cwd", ".", "--"],
+    );
+    cmd = maybe_wrap(app, cmd, app.gamemode, "gamemoderun", &["gamemoderun"]);
 
     app.cmd = cmd;
 }
@@ -247,5 +292,16 @@ mod tests {
         // Both empty -> empty
         let result = merge_ld_audit("", "");
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn command_exists_detects_executables() {
+        // This test binary is a real executable, referenced by absolute path.
+        let me = std::env::current_exe().unwrap();
+        assert!(command_exists(me.to_str().unwrap()));
+
+        // Missing absolute path and missing bare name are both false.
+        assert!(!command_exists("/nonexistent/definitely/not/here_zzz"));
+        assert!(!command_exists("game_wrapper_missing_binary_zzz123"));
     }
 }

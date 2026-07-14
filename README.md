@@ -109,6 +109,13 @@ Valued flags:
 Short flags may be bundled (`-ghk`) and valued flags accept attached or
 separate arguments (`-l1` or `-l 1`).
 
+### Missing wrapper tools
+
+Before launch, each enabled wrapper (`gamemoderun`, `mangohud`, `speedhack`,
+`protonhax`, `gamescope`, `wezterm`) is checked for on `PATH`. If a wrapper is
+not installed it is skipped rather than causing a launch failure, and a
+`Wrapper not found, skipping: <name>` line is written to the log.
+
 ## Logging
 
 Logs live under `$HOME/logs/game/`.
