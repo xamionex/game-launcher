@@ -129,6 +129,7 @@ pub fn apply_wrappers(app: &mut App) {
     std::env::set_var("PROTON_VKD3D_HEAP", "1");
     std::env::set_var("PROTON_DXVK_LOWLATENCY", "1");
     std::env::set_var("PROTON_FSR4_UPGRADE", "1");
+    std::env::set_var("FSR4_UPGRADE", "1");
 
     if contains_ci(&info, "NVIDIA") {
         std::env::set_var("PROTON_ENABLE_NVAPI", "1");
