@@ -11,11 +11,11 @@ fn space_path_passed_as_single_argument() {
     let bin = env!("CARGO_BIN_EXE_game");
     let space_arg = "/tmp/with spaces/Orebits Demo V1.0";
 
-    // Wrappers disabled (-g -h -k), silent mode (-l -1) so the command is run
+    // Wrappers disabled (-g -h), silent mode (-l -1) so the command is run
     // directly. `printf '%s\n'` prints each argument on its own line, so a
     // split argument would yield multiple lines.
     let output = Command::new(bin)
-        .args(["-g", "-h", "-k", "-l", "-1", "--", "printf", "%s\\n", space_arg])
+        .args(["-g", "-h", "-l", "-1", "--", "printf", "%s\\n", space_arg])
         .env("HOME", std::env::temp_dir())
         .output()
         .expect("failed to run game binary");

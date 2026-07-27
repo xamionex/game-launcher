@@ -1,5 +1,5 @@
-//! Environment setup and command wrapping (gamemode, mangohud, speedhack,
-//! protonhax, gamescope, wezterm) plus Wayland/GPU detection.
+//! Environment setup and command wrapping (gamemode, mangohud, protonhax,
+//! gamescope, wezterm) plus Wayland/GPU detection.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -147,16 +147,13 @@ pub fn apply_wrappers(app: &mut App) {
         std::env::set_var("ENABLE_LAYER_MESA_ANTI_LAG", "1");
     }
 
-    // Proton games skip the speedhack layer; native games skip protonhax.
-    if app.isproton {
-        app.speedhack = false;
-    } else {
+    // Native games skip protonhax; Proton games never had it on anyway.
+    if !app.isproton {
         app.protonhax = false;
     }
 
     let mut cmd = std::mem::take(&mut app.cmd);
 
-    cmd = maybe_wrap(app, cmd, app.speedhack, "speedhack", &["speedhack"]);
     cmd = maybe_wrap(app, cmd, app.protonhax, "protonhax", &["protonhax", "init"]);
 
     // Gamescope has two variants and sets Wayland env vars, so it is handled

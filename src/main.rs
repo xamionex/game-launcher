@@ -1,3 +1,3 @@
 fn main() {
-    std::process::exit(game::run());
+    std::process::exit(game_launcher::run());
 }

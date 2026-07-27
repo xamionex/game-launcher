@@ -43,15 +43,14 @@ pub struct App {
     pub gamemode: bool,
     pub mangohud: bool,
     pub protonhax: bool,
-    pub pressure_vessel: bool,
-    pub speedhack: bool,
-    /// Set `STEAM_COMPAT_RUNTIME_SDL3=0` when true (the `-L` flag).
-    pub disable_sdl3: bool,
     pub wayland_force_enable: bool,
     pub wayland_force_disable: bool,
     pub enable_custom_vkd3d: bool,
 
     // === Toggles disabled by default (can be enabled) ===
+    pub pressure_vessel: bool,
+    /// Set `STEAM_COMPAT_RUNTIME_SDL3=0` when true (the `-L` flag).
+    pub disable_sdl3: bool,
     pub gamescope: bool,
     pub gamescope_wayland: bool,
     pub wezterm: bool,
@@ -95,13 +94,12 @@ impl Default for App {
             gamemode: true,
             mangohud: true,
             protonhax: true,
-            pressure_vessel: true,
-            speedhack: true,
-            disable_sdl3: false,
             wayland_force_enable: false,
             wayland_force_disable: false,
             enable_custom_vkd3d: false,
 
+            pressure_vessel: false,
+            disable_sdl3: false,
             gamescope: false,
             gamescope_wayland: false,
             wezterm: false,

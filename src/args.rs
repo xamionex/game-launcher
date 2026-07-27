@@ -65,8 +65,7 @@ fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
         'g' => app.gamemode = false,
         'h' => app.mangohud = false,
         'p' => app.protonhax = false,
-        'P' => app.pressure_vessel = false,
-        'k' => app.speedhack = false,
+        'P' => app.pressure_vessel = true,
         's' => app.gamescope = true,
         'S' => app.gamescope_wayland = true,
         'w' => app.wezterm = true,
@@ -205,13 +204,12 @@ pub fn print_help(prog: &str) {
     eprintln!("  -g            Disable GameMode");
     eprintln!("  -h            Disable MangoHud");
     eprintln!("  -p            Disable ProtonHax");
-    eprintln!("  -P            Disable Pressure Vessel elimination");
-    eprintln!("  -k            Disable speedhack layer");
-    eprintln!("  -L            Disable SDL3 in Steam runtime (sets STEAM_COMPAT_RUNTIME_SDL3=0)");
     eprintln!("  -W            Force Wayland (overrides GPU detection)");
     eprintln!("  -X            Force disable Wayland");
     eprintln!();
     eprintln!("== Disabled by default (can be enabled) ==");
+    eprintln!("  -P            Enable Pressure Vessel elimination");
+    eprintln!("  -L            Enable SDL3 elimination in Steam runtime (sets STEAM_COMPAT_RUNTIME_SDL3=0)");
     eprintln!("  -s            Enable Gamescope (X11 backend)");
     eprintln!("  -S            Enable Gamescope (Wayland backend)");
     eprintln!("  -w            Run in wezterm");
@@ -286,10 +284,9 @@ mod tests {
     #[test]
     fn bundled_boolean_flags() {
         let mut app = App::default();
-        parse_flags(&mut app, &v(&["-ghk", "--", "x"])).unwrap();
+        parse_flags(&mut app, &v(&["-gh", "--", "x"])).unwrap();
         assert!(!app.gamemode);
         assert!(!app.mangohud);
-        assert!(!app.speedhack);
     }
 
     #[test]
@@ -336,8 +333,8 @@ mod tests {
     #[test]
     fn command_without_double_dash() {
         let mut app = App::default();
-        parse_flags(&mut app, &v(&["-k", "FOO=1", "/bin/game", "arg"])).unwrap();
-        assert!(!app.speedhack);
+        parse_flags(&mut app, &v(&["-g", "FOO=1", "/bin/game", "arg"])).unwrap();
+        assert!(!app.gamemode);
         assert_eq!(app.custom_exports.len(), 1);
         assert_eq!(app.original_cmd, v(&["/bin/game", "arg"]));
     }
@@ -355,5 +352,32 @@ mod tests {
         assert!(!app.fix_audit);
         parse_flags(&mut app, &v(&["-F", "--", "x"])).unwrap();
         assert!(app.fix_audit);
+    }
+
+    #[test]
+    fn pressure_vessel_disabled_by_default_enabled_by_flag() {
+        let mut app = App::default();
+        assert!(!app.pressure_vessel);
+        parse_flags(&mut app, &v(&["-P", "--", "x"])).unwrap();
+        assert!(app.pressure_vessel);
+    }
+
+    #[test]
+    fn sdl3_disabled_by_default_enabled_by_flag() {
+        let mut app = App::default();
+        assert!(!app.disable_sdl3);
+        parse_flags(&mut app, &v(&["-L", "--", "x"])).unwrap();
+        assert!(app.disable_sdl3);
+    }
+
+    #[test]
+    fn speedhack_flag_removed() {
+        // `-k` used to disable speedhack; the layer is removed entirely now,
+        // so the flag is unknown and requests usage.
+        let mut app = App::default();
+        assert!(matches!(
+            parse_flags(&mut app, &v(&["-k", "--", "x"])),
+            Err(ParseError::Usage)
+        ));
     }
 }

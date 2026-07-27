@@ -1,13 +1,16 @@
-# game
+# game-launcher
 
 A fast Steam launch wrapper, written in Rust. It is a port of the original
 `game.sh` with the same behavior plus a few fixes.
 
 It wraps the game command Steam hands to it (`%command%`), applies optional
-tools (GameMode, MangoHud, speedhack, ProtonHax, Gamescope, wezterm), sets a
-curated set of Proton/DXVK/VKD3D environment variables, detects the GPU vendor
-and Wayland, optionally stages the game into a RAM disk, launches background
-mods, and writes structured per game logs.
+tools (GameMode, MangoHud, ProtonHax, Gamescope, wezterm), sets a curated set
+of Proton/DXVK/VKD3D environment variables, detects the GPU vendor and Wayland,
+optionally stages the game into a RAM disk, launches background mods, and
+writes structured per game logs.
+
+The Cargo package is named `game-launcher`; the built binary is still named
+`game` (see `[[bin]]` in `Cargo.toml`).
 
 ## Why this exists / what changed from game.sh
 
@@ -75,17 +78,15 @@ Enabled by default (use the flag to disable):
 | `-g` | Disable GameMode |
 | `-h` | Disable MangoHud |
 | `-p` | Disable ProtonHax |
-| `-P` | Disable Pressure Vessel elimination |
-| `-k` | Disable speedhack layer |
-| `-L` | Disable SDL3 in the Steam runtime (`STEAM_COMPAT_RUNTIME_SDL3=0`) |
 | `-W` | Force Wayland (override GPU detection) |
 | `-X` | Force disable Wayland |
-| `-V` | Disable custom vkd3d-proton loading |
 
 Disabled by default (use the flag to enable):
 
 | Flag | Effect |
 | ---- | ------ |
+| `-P` | Enable Pressure Vessel elimination |
+| `-L` | Enable SDL3 elimination in the Steam runtime (`STEAM_COMPAT_RUNTIME_SDL3=0`) |
 | `-s` | Enable Gamescope (X11 backend) |
 | `-S` | Enable Gamescope (Wayland backend) |
 | `-w` | Run in wezterm |
@@ -94,6 +95,7 @@ Disabled by default (use the flag to enable):
 | `-f` | Enable LSFG-VK |
 | `-m` | Enable modding support (adds winhttp override) |
 | `-F` | Enable LD_AUDIT with `$HOME/scripts/fix.so` (merges with user-set LD_AUDIT) |
+| `-V` | Enable custom vkd3d-proton loading |
 
 Valued flags:
 
@@ -111,9 +113,9 @@ separate arguments (`-l1` or `-l 1`).
 
 ### Missing wrapper tools
 
-Before launch, each enabled wrapper (`gamemoderun`, `mangohud`, `speedhack`,
-`protonhax`, `gamescope`, `wezterm`) is checked for on `PATH`. If a wrapper is
-not installed it is skipped rather than causing a launch failure, and a
+Before launch, each enabled wrapper (`gamemoderun`, `mangohud`, `protonhax`,
+`gamescope`, `wezterm`) is checked for on `PATH`. If a wrapper is not installed
+it is skipped rather than causing a launch failure, and a
 `Wrapper not found, skipping: <name>` line is written to the log.
 
 ## Logging
