@@ -121,7 +121,65 @@ pub fn apply_wrappers(app: &mut App) {
     std::env::set_var("ENABLE_HDR_WSI", "1");
     std::env::set_var("PROTON_USE_EAC_LINUX", "1");
     std::env::set_var("PROTON_USE_NTSYNC", "1");
-    std::env::set_var("DXVK_CONFIG", "dxgi.syncInterval=0");
+
+    // DXVK
+    use std::fs;
+
+    // Prefer a per-game config (<exe>.conf) if one exists, otherwise fall back
+    // to the global dxvk.conf.
+    //
+    // The game's own executable is the right key, not `app.cmd.first()`: by the
+    // time this runs, `build_command` has already produced a cmd whose first
+    // token is the Proton launcher (e.g. `.../GE-Proton9-20/proton`) for Wine
+    // games, or the native binary otherwise. Using that would look up
+    // `proton.conf` instead of `<gamename>.conf`. The original bash script used
+    // `$EXE_NAME`, derived from the game executable, so we mirror that by
+    // scanning `original_cmd` for a `.exe` and falling back to the last token.
+    let exe_name = app
+        .original_cmd
+        .iter()
+        .find(|a| a.to_lowercase().ends_with(".exe"))
+        .or_else(|| app.original_cmd.last())
+        .and_then(|p| std::path::Path::new(p).file_stem())
+        .and_then(|s| s.to_str());
+
+    let dxvk_dir = dirs::home_dir().unwrap().join(".config/dxvk");
+
+    let dxvk_config_file = exe_name
+        .map(|name| dxvk_dir.join(format!("{name}.conf")))
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| dxvk_dir.join("dxvk.conf"));
+
+    app.log(&format!(
+        "Using DXVK_CONFIG generated from {}",
+        dxvk_config_file.display()
+    ));
+
+    match fs::read_to_string(&dxvk_config_file) {
+        Ok(contents) => {
+            // Match the original bash pipeline:
+            //   rg --pcre2 "^[^#].+(?=$)" | sed "s/$/;/g" | xargs echo
+            // i.e. keep non-empty, non-comment lines, append `;`, and join with
+            // spaces into a single string.
+            let dxvk_config = contents
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|line| format!("{line};"))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            app.log(&format!("DXVK_CONFIG={dxvk_config}"));
+            std::env::set_var("DXVK_CONFIG", &dxvk_config);
+        }
+        Err(e) => {
+            app.log(&format!(
+                "Failed to read DXVK config {}: {e}",
+                dxvk_config_file.display()
+            ));
+        }
+    }
+
     std::env::set_var(
         "VKD3D_CONFIG",
         "dxr12,dxr,descriptor_heap,enable_experimental_features",

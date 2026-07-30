@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.102"
+dirs = "6.0.0"
 libc = "0.2.186"
 os_pipe = "1.2.3"
 regex = "1.12.4"
