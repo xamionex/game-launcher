@@ -1,33 +1,13 @@
 # game-launcher
 
-A fast Steam launch wrapper, written in Rust. It is a port of the original
-`game.sh` with the same behavior plus a few fixes.
+A fast Steam launch wrapper, written in Rust.
 
-It wraps the game command Steam hands to it (`%command%`), applies optional
-tools (GameMode, MangoHud, ProtonHax, Gamescope, wezterm), sets a curated set
-of Proton/DXVK/VKD3D environment variables, detects the GPU vendor and Wayland,
-optionally stages the game into a RAM disk, launches background mods, and
-writes structured per game logs.
+It wraps the game command Steam hands to it (`%command%`), applies optional tools (GameMode, MangoHud, ProtonHax, Gamescope, wezterm),
+sets a curated set of Proton/DXVK/VKD3D environment variables, detects the GPU vendor and Wayland, and writes structured per game logs to `~/logs/game`.
 
-The Cargo package is named `game-launcher`; the built binary is still named
-`game` (see `[[bin]]` in `Cargo.toml`).
+Optionally: stages the game into a RAM disk, launches background mods.
 
-## Why this exists / what changed from game.sh
-
-- Paths with spaces now launch. The shell version flattened the argument array
-  into a single string and re-split it on whitespace, which broke executables
-  and paths containing spaces (for example
-  `.../common/Orebits Demo/Orebits DemoV1.0`). This port keeps the command as a
-  vector and never re-splits, so every argument is passed through untouched.
-- Environment variables use natural positional syntax. Instead of the old
-  `-v VAR=VALUE` flag, set variables as `KEY=VALUE` tokens before `--`
-  (for example `game FLAG=1 -- %command%`). The legacy `-v` flag is removed.
-- The wrapper exits with the game's own exit code, so Steam sees crashes. The
-  shell version effectively always returned 0.
-- Logging is reorganized into per game folders with rotation and archiving
-  (see below).
-- A desktop notification is sent when the game crashes or when the wrapper
-  itself fails to launch the command.
+The Cargo package is named `game-launcher`; the built binary is named `game` (see `[[bin]]` in `Cargo.toml`).
 
 ## Build
 
@@ -113,32 +93,25 @@ separate arguments (`-l1` or `-l 1`).
 
 ### Missing wrapper tools
 
-Before launch, each enabled wrapper (`gamemoderun`, `mangohud`, `protonhax`,
-`gamescope`, `wezterm`) is checked for on `PATH`. If a wrapper is not installed
-it is skipped rather than causing a launch failure, and a
-`Wrapper not found, skipping: <name>` line is written to the log.
+Before launch, each enabled wrapper (`gamemoderun`, `mangohud`, `protonhax`, `gamescope`, `wezterm`) is checked for on `PATH`.
+If a wrapper is not installed it is skipped rather than causing a launch failure, and a `Wrapper not found, skipping: <name>` line is written to the log.
 
 ## Logging
 
 Logs live under `$HOME/logs/game/`.
 
-- One folder per game, named by Steam App ID when available, otherwise by the
-  process/game name. For example `~/logs/game/4521640/`.
-- Each launch writes a new timestamped log:
-  `"<appid> <name> <YYYYmmdd_HHMMSS>.log"`.
-- At most 3 plain `.log` files are kept per folder. On the next launch, older
-  logs are compressed to `<name>.log.tar.gz` and the originals are removed.
+- One folder per game, named by Steam App ID when available, otherwise by the process/game name.
+  For example `~/logs/game/4521640/`.
+- Each launch writes a new timestamped log: `"<appid> <name> <YYYYmmdd_HHMMSS>.log"`.
+- At most 3 plain `.log` files are kept per folder. On the next launch, older logs are compressed to `<name>.log.tar.gz` and the originals are removed.
   Archives are not deleted automatically.
-- On a non-zero exit the active log is renamed to
-  `"... (CRASHED: <code>).log"`.
+- On a non-zero exit the active log is renamed to `"... (CRASHED: <code>).log"`.
 
 Logging levels:
 
 - `-l -1` silent: the game runs with inherited stdio and nothing is captured.
-- `-l 0` normal (default): output is captured, consecutive duplicate lines are
-  collapsed (`[xN]`), and written to the log.
-- `-l 1` verbose: each line is prefixed with an elapsed timestamp, echoed to the
-  terminal, de-duplicated by message, and written to the log.
+- `-l 0` normal (default): output is captured, consecutive duplicate lines are collapsed (`[xN]`), and written to the log.
+- `-l 1` verbose: each line is prefixed with an elapsed timestamp, echoed to the terminal, de-duplicated by message, and written to the log.
 
 ### Notifications
 
@@ -150,15 +123,14 @@ A desktop notification (via `notify-send`, best effort) is sent when:
 ## RAM disk (`-R`)
 
 When enabled and the current directory is under a Steam `.../common/...` path,
-the game directory is copied into a tmpfs mount, bind mounted in place, and
-synced back/unmounted on exit. These steps use `sudo` for mount, rsync, and
-umount, exactly as the original script did. Without `-R`, setup is skipped.
+the game directory is copied into a tmpfs mount, bind mounted in place, and synced back/unmounted on exit. These steps use `sudo` for mount, rsync, and umount.
+Without `-R`, setup is skipped.
 
 ## Mods (`-u`)
 
-Each `-u "command"` runs in the background via `bash -c`. With logging enabled,
-each mod gets its own log file next to the main log. With `-e`, mod processes
-are terminated when the wrapper exits.
+Each `-u "command"` runs in the background via `bash -c`.
+With logging enabled, each mod gets its own log file next to the main log.
+With `-e`, mod processes are terminated when the wrapper exits.
 
 ## Development
 
@@ -166,6 +138,3 @@ are terminated when the wrapper exits.
 cargo test
 cargo clippy --all-targets
 ```
-
-The regression test in `tests/spaces.rs` launches the built binary with a space
-containing argument and asserts it arrives as a single argument.
