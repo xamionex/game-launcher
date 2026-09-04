@@ -186,12 +186,13 @@ pub fn apply_wrappers(app: &mut App) {
     );
     std::env::set_var("PROTON_VKD3D_HEAP", "1");
     std::env::set_var("PROTON_DXVK_LOWLATENCY", "1");
+    std::env::set_var("LOW_LATENCY_LAYER", "1");
     std::env::set_var("PROTON_FSR4_UPGRADE", "1");
     std::env::set_var("FSR4_UPGRADE", "1");
 
     if contains_ci(&info, "NVIDIA") {
-        std::env::set_var("PROTON_ENABLE_NVAPI", "1");
-        std::env::set_var("DXVK_ENABLE_NVAPI", "1");
+        //std::env::set_var("PROTON_ENABLE_NVAPI", "1");
+        //std::env::set_var("DXVK_ENABLE_NVAPI", "1");
         std::env::set_var("PROTON_DLSS_UPGRADE", "1");
         std::env::set_var("__GL_THREADED_OPTIMIZATIONS", "1");
         std::env::set_var("PROTON_NVIDIA_LIBS", "1");
@@ -202,7 +203,7 @@ pub fn apply_wrappers(app: &mut App) {
         || contains_ci(&info, "Advanced Micro Devices")
         || contains_ci(&info, "Radeon")
     {
-        std::env::set_var("ENABLE_LAYER_MESA_ANTI_LAG", "1");
+        //std::env::set_var("ENABLE_LAYER_MESA_ANTI_LAG", "1");
     }
 
     // Native games skip protonhax; Proton games never had it on anyway.
