@@ -187,6 +187,7 @@ pub fn apply_wrappers(app: &mut App) {
     std::env::set_var("PROTON_VKD3D_HEAP", "1");
     std::env::set_var("PROTON_DXVK_LOWLATENCY", "1");
     std::env::set_var("LOW_LATENCY_LAYER", "1");
+    std::env::set_var("LOW_LATENCY_LAYER_REFLEX", "1");
     std::env::set_var("PROTON_FSR4_UPGRADE", "1");
     std::env::set_var("FSR4_UPGRADE", "1");
 
