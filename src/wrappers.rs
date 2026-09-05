@@ -187,7 +187,6 @@ pub fn apply_wrappers(app: &mut App) {
     std::env::set_var("PROTON_VKD3D_HEAP", "1");
     std::env::set_var("PROTON_DXVK_LOWLATENCY", "1");
     std::env::set_var("LOW_LATENCY_LAYER", "1");
-    std::env::set_var("LOW_LATENCY_LAYER_REFLEX", "1");
     std::env::set_var("PROTON_FSR4_UPGRADE", "1");
     std::env::set_var("FSR4_UPGRADE", "1");
 
@@ -200,6 +199,7 @@ pub fn apply_wrappers(app: &mut App) {
         std::env::set_var("PROTON_NVIDIA_LIBS_NO_32BIT", "1");
         std::env::set_var("PROTON_NVIDIA_NVOPTIX", "1");
         std::env::set_var("PROTON_ENABLE_NGX_UPDATER", "1");
+        std::env::set_var("LOW_LATENCY_LAYER_REFLEX", "1");
     } else if contains_ci(&info, "AMD")
         || contains_ci(&info, "Advanced Micro Devices")
         || contains_ci(&info, "Radeon")
