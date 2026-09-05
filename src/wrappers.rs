@@ -1,5 +1,4 @@
-//! Environment setup and command wrapping (gamemode, mangohud, protonhax,
-//! gamescope, wezterm) plus Wayland/GPU detection.
+//! Environment setup and command wrapping (gamemode, mangohud, protonhax, gamescope, wezterm) plus Wayland/GPU detection.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -7,8 +6,7 @@ use std::process::Command;
 
 use crate::config::{App, EMPTY_MARKER};
 
-/// Return the `lspci -vnn` lines describing display adapters, or an empty
-/// string if `lspci` is unavailable.
+/// Return the `lspci -vnn` lines describing display adapters, or an empty string if `lspci` is unavailable.
 fn gpu_info() -> String {
     let output = Command::new("lspci").arg("-vnn").output();
     let Ok(output) = output else {
@@ -28,8 +26,7 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 
-/// Decide whether to enable Wayland, honoring `-W`/`-X` overrides and otherwise
-/// enabling it for NVIDIA GPUs.
+/// Decide whether to enable Wayland, honoring `-W`/`-X` overrides and otherwise enabling it for NVIDIA GPUs.
 pub fn determine_wayland_by_gpu(app: &mut App) {
     let info = gpu_info();
     app.log("Determining wayland");
@@ -49,6 +46,16 @@ pub fn determine_wayland_by_gpu(app: &mut App) {
     }
 }
 
+/// True when running inside a Steam Deck style gaming-mode session (gamescope with the Steam session type).
+fn is_gaming_mode() -> bool {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let steam_game = std::env::var("SteamGameId").is_ok();
+    session.eq_ignore_ascii_case("gamescope")
+        || desktop.eq_ignore_ascii_case("gamescope")
+        || (steam_game && desktop.eq_ignore_ascii_case("steam"))
+}
+
 /// Prepend `prefix` tokens to `cmd`, returning a new vector.
 fn prepend(prefix: &[&str], cmd: &[String]) -> Vec<String> {
     let mut out: Vec<String> = prefix.iter().map(|s| s.to_string()).collect();
@@ -64,8 +71,7 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-/// True if `program` resolves to an executable, either directly (when it
-/// contains a `/`) or via a `PATH` lookup, like `command -v`.
+/// True if `program` resolves to an executable, either directly (when it contains a `/`) or via a `PATH` lookup, like `command -v`.
 fn command_exists(program: &str) -> bool {
     if program.contains('/') {
         return is_executable(Path::new(program));
@@ -128,13 +134,9 @@ pub fn apply_wrappers(app: &mut App) {
     // Prefer a per-game config (<exe>.conf) if one exists, otherwise fall back
     // to the global dxvk.conf.
     //
-    // The game's own executable is the right key, not `app.cmd.first()`: by the
-    // time this runs, `build_command` has already produced a cmd whose first
-    // token is the Proton launcher (e.g. `.../GE-Proton9-20/proton`) for Wine
-    // games, or the native binary otherwise. Using that would look up
-    // `proton.conf` instead of `<gamename>.conf`. The original bash script used
-    // `$EXE_NAME`, derived from the game executable, so we mirror that by
-    // scanning `original_cmd` for a `.exe` and falling back to the last token.
+    // The game's own executable is the right key, not `app.cmd.first()`: by the time this runs, `build_command` has already produced a cmd whose first token is the Proton launcher (e.g. `.../GE-Proton9-20/proton`) for Wine games, or the native binary otherwise.
+    // Using that would look up `proton.conf` instead of `<gamename>.conf`.
+    // The original bash script used `$EXE_NAME`, derived from the game executable, so we mirror that by scanning `original_cmd` for a `.exe` and falling back to the last token.
     let exe_name = app
         .original_cmd
         .iter()
@@ -159,8 +161,7 @@ pub fn apply_wrappers(app: &mut App) {
         Ok(contents) => {
             // Match the original bash pipeline:
             //   rg --pcre2 "^[^#].+(?=$)" | sed "s/$/;/g" | xargs echo
-            // i.e. keep non-empty, non-comment lines, append `;`, and join with
-            // spaces into a single string.
+            // i.e. keep non-empty, non-comment lines, append `;`, and join with spaces into a single string.
             let dxvk_config = contents
                 .lines()
                 .map(str::trim)
@@ -212,12 +213,17 @@ pub fn apply_wrappers(app: &mut App) {
         app.protonhax = false;
     }
 
+    // Gaming mode (Steam Deck / handheld) already shows a HUD via the Steam overlay, so MangoHud is redundant there. `-H` forces it back on.
+    if is_gaming_mode() && !app.mangohud_force {
+        app.log("Gaming mode detected, disabling MangoHud");
+        app.mangohud = false;
+    }
+
     let mut cmd = std::mem::take(&mut app.cmd);
 
     cmd = maybe_wrap(app, cmd, app.protonhax, "protonhax", &["protonhax", "init"]);
 
-    // Gamescope has two variants and sets Wayland env vars, so it is handled
-    // outside maybe_wrap but still checks for the binary.
+    // Gamescope has two variants and sets Wayland env vars, so it is handled outside maybe_wrap but still checks for the binary.
     if app.gamescope_wayland {
         if command_exists("gamescope") {
             std::env::set_var("PROTON_ENABLE_WAYLAND", "1");
@@ -361,5 +367,26 @@ mod tests {
         // Missing absolute path and missing bare name are both false.
         assert!(!command_exists("/nonexistent/definitely/not/here_zzz"));
         assert!(!command_exists("game_wrapper_missing_binary_zzz123"));
+    }
+
+    #[test]
+    fn gaming_mode_detection() {
+        // Gamescope session type.
+        std::env::set_var("XDG_SESSION_TYPE", "gamescope");
+        std::env::remove_var("XDG_CURRENT_DESKTOP");
+        std::env::remove_var("SteamGameId");
+        assert!(is_gaming_mode());
+
+        // Steam session type with a game running.
+        std::env::set_var("XDG_SESSION_TYPE", "steam");
+        std::env::set_var("XDG_CURRENT_DESKTOP", "steam");
+        std::env::set_var("SteamGameId", "12345");
+        assert!(is_gaming_mode());
+
+        // Desktop session is not gaming mode.
+        std::env::set_var("XDG_SESSION_TYPE", "wayland");
+        std::env::set_var("XDG_CURRENT_DESKTOP", "KDE");
+        std::env::remove_var("SteamGameId");
+        assert!(!is_gaming_mode());
     }
 }

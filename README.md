@@ -33,6 +33,23 @@ mkdir ~/scripts
 ln -s $PWD/fix.so ~/scripts/fix.so
 ```
 
+### Handheld / Steam Deck gaming mode
+
+Gaming mode (the gamescope session) does not source your shell profiles, so `~/.local/bin` may not be on `PATH` and Steam will fail to find the `game` binary.
+If a game fails to start and no log appears in `~/logs/game/`, this is why.
+Use the absolute path in Launch Options:
+```
+/home/deck/.local/bin/game -Fo -- %command%
+```
+or add `~/.local/bin` to the session environment:
+```
+mkdir -p ~/.config/environment.d
+echo 'PATH=$HOME/.local/bin:$PATH' > ~/.config/environment.d/10-local-bin.conf
+```
+
+Gaming mode is detected automatically and MangoHud is skipped, since the Steam
+overlay already provides a HUD there. Use `-H` to force MangoHud on anyway.
+
 ## Usage
 
 ```
@@ -66,6 +83,7 @@ Enabled by default (use the flag to disable):
 | ---- | ------ |
 | `-g` | Disable GameMode |
 | `-h` | Disable MangoHud |
+| `-H` | Force MangoHud on (even in gaming mode) |
 | `-p` | Disable ProtonHax |
 | `-W` | Force Wayland (override GPU detection) |
 | `-X` | Force disable Wayland |

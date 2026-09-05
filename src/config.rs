@@ -42,6 +42,8 @@ pub struct App {
     // === Toggles enabled by default (can be disabled) ===
     pub gamemode: bool,
     pub mangohud: bool,
+    /// Force MangoHud on even in gaming mode (`-H`).
+    pub mangohud_force: bool,
     pub protonhax: bool,
     pub wayland_force_enable: bool,
     pub wayland_force_disable: bool,
@@ -93,6 +95,7 @@ impl Default for App {
         App {
             gamemode: true,
             mangohud: true,
+            mangohud_force: false,
             protonhax: true,
             wayland_force_enable: false,
             wayland_force_disable: false,

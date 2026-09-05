@@ -64,6 +64,7 @@ fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
     match c {
         'g' => app.gamemode = false,
         'h' => app.mangohud = false,
+        'H' => app.mangohud_force = true,
         'p' => app.protonhax = false,
         'P' => app.pressure_vessel = true,
         's' => app.gamescope = true,
@@ -203,6 +204,7 @@ pub fn print_help(prog: &str) {
     eprintln!("== Enabled by default (can be disabled) ==");
     eprintln!("  -g            Disable GameMode");
     eprintln!("  -h            Disable MangoHud");
+    eprintln!("  -H            Force MangoHud on (even in gaming mode)");
     eprintln!("  -p            Disable ProtonHax");
     eprintln!("  -W            Force Wayland (overrides GPU detection)");
     eprintln!("  -X            Force disable Wayland");
