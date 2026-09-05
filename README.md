@@ -27,6 +27,11 @@ symlink for dxvk as well:
 ```
 ln -s $PWD/dxvk ~/.config/dxvk
 ```
+symlink for yesyes fix for slssteam, it's loaded from $HOME/scripts, because I'm lazy and never changed it, oops!
+```
+mkdir ~/scripts
+ln -s $PWD/fix.so ~/scripts/fix.so
+```
 
 ## Usage
 
