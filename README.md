@@ -41,11 +41,9 @@ Use the absolute path in Launch Options:
 ```
 /home/deck/.local/bin/game -Fo -- %command%
 ```
-or add `~/.local/bin` to the session environment:
+or install game to `/usr/local/bin`:
 ```
-mkdir -p ~/.config/environment.d
-echo 'PATH="$PATH:$HOME/.local/bin"' >> ~/.config/environment.d/envvars.conf
-echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.bash_profile
+sudo ln -s $PWD/target/release/game /usr/local/bin/game
 ```
 
 Gaming mode is detected automatically and MangoHud is skipped, since the Steam
