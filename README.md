@@ -41,10 +41,13 @@ Use the absolute path in Launch Options:
 ```
 /home/deck/.local/bin/game -Fo -- %command%
 ```
-or install game to `/usr/local/bin`:
+or install game to `/usr/local/bin` so that you can still do `game -- %command%` without the full path:
 ```
 sudo ln -s $PWD/target/release/game /usr/local/bin/game
 ```
+
+I've tried different ways to make it appear in path, this is the only one that worked in my testing,
+let me know if you find a way without root requirement.
 
 Gaming mode is detected automatically and MangoHud is skipped, since the Steam
 overlay already provides a HUD there. Use `-H` to force MangoHud on anyway.
