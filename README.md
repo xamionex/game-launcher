@@ -18,10 +18,14 @@ cargo build --release
 # binary at target/release/game
 ```
 
-Optionally copy it onto your PATH:
+Optionally symlink it onto your local bin (add this to your path):
 
 ```sh
-cp target/release/game ~/.local/bin/game
+ln -s $PWD/target/release/game ~/.local/bin/game
+```
+symlink for dxvk as well:
+```
+ln -s $PWD/dxvk ~/.config/dxvk
 ```
 
 ## Usage
