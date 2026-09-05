@@ -15,8 +15,8 @@ Requires a Rust toolchain.
 
 ```sh
 cargo build --release
-# binary at target/release/game
 ```
+binary is located at target/release/game
 
 Optionally symlink it onto your local bin (add this to your path):
 
