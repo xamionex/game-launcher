@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::config::{App, RAM_MOUNT};
+use crate::config::{ensure_logs_dir, App, RAM_MOUNT};
 use crate::logging::append_line;
 
 /// Resolve the log target for ramdisk messages: the active log, else
@@ -15,8 +15,7 @@ fn ram_log_path(app: &App) -> PathBuf {
     if let Some(log) = &app.log_file {
         return log.clone();
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join("logs").join("ramdisk.log")
+    ensure_logs_dir().join("ramdisk.log")
 }
 
 fn ram_log(app: &App, msg: &str) {

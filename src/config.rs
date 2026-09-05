@@ -155,10 +155,17 @@ impl App {
     }
 }
 
+/// Ensure `$HOME/logs` exists, creating it if missing, and return it.
+pub fn ensure_logs_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let logs = PathBuf::from(home).join("logs");
+    let _ = std::fs::create_dir_all(&logs);
+    logs
+}
+
 /// Base directory for logs: `$HOME/logs/game`.
 pub fn log_base() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join("logs").join("game")
+    ensure_logs_dir().join("game")
 }
 
 /// Send a best-effort desktop notification via `notify-send`.
