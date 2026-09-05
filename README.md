@@ -44,7 +44,8 @@ Use the absolute path in Launch Options:
 or add `~/.local/bin` to the session environment:
 ```
 mkdir -p ~/.config/environment.d
-echo 'PATH=$HOME/.local/bin:$PATH' > ~/.config/environment.d/10-local-bin.conf
+echo 'PATH="$PATH:$HOME/.local/bin"' >> ~/.config/environment.d/envvars.conf
+echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.bash_profile
 ```
 
 Gaming mode is detected automatically and MangoHud is skipped, since the Steam
