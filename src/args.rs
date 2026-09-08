@@ -225,6 +225,7 @@ pub fn print_help(prog: &str) {
     );
     eprintln!("  -V            Enable custom vkd3d-proton loading (~/Projects/vkd3d-proton/build/vkd3d-proton-master)");
     eprintln!("  -v            Enable hypervisor loader (LD_PRELOAD=$HOME/.local/lib/liblinuwux.so, sets PROTON_DISABLE_LSTEAMCLIENT=0)");
+    eprintln!("                Might require you to disable mangohud with -h");
     eprintln!();
     eprintln!("== Flags that accept values or lists ==");
     eprintln!("  -l LEVEL      Set logging level (-1: silent, 0: normal, 1: verbose)");

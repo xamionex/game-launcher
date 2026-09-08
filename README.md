@@ -30,7 +30,9 @@ ln -s $PWD/dxvk ~/.config/dxvk
 
 netsock and the hypervisor loader (liblinuwux.so) are embedded in the binary and self-extract on first use, no setup needed.
 netsock goes to `$HOME/.config/SLSsteam/tools/netsock/` and the hypervisor to `$HOME/.local/lib/`.
+
 Hypervisor setup and usage guide: https://cs.rin.ru/forum/viewtopic.php?f=20&t=160056
+Hypervisor requires mangohud to be disabled sometimes to fully work. (-hv)
 
 ### Handheld / Steam Deck gaming mode
 
