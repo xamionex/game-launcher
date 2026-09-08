@@ -61,6 +61,8 @@ pub struct App {
     pub lsfg: bool,
     pub modding_support: bool,
     pub fix_audit: bool,
+    /// Enable LinuwUx hypervisor loader via `LD_PRELOAD` (the `-v` flag).
+    pub hypervisor: bool,
 
     // === Valued flags ===
     pub logging_level: i32,
@@ -111,6 +113,7 @@ impl Default for App {
             lsfg: false,
             modding_support: false,
             fix_audit: false,
+            hypervisor: false,
 
             logging_level: 0,
             instances: 1,

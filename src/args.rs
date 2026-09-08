@@ -88,6 +88,7 @@ fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
         'L' => app.disable_sdl3 = true,
         'R' => app.use_ramdisk = true,
         'F' => app.fix_audit = true,
+        'v' => app.hypervisor = true,
         _ => return Err(ParseError::Usage),
     }
     Ok(())
@@ -220,9 +221,10 @@ pub fn print_help(prog: &str) {
     eprintln!("  -f            Enable LSFG-VK");
     eprintln!("  -m            Enable modding support (adds winhttp override)");
     eprintln!(
-        "  -F            Enable LD_AUDIT with $HOME/scripts/fix.so (merges with user-set LD_AUDIT)"
+        "  -F            Enable LD_AUDIT with $HOME/.config/SLSsteam/tools/netsock/netsock.so (merges with user-set LD_AUDIT)"
     );
     eprintln!("  -V            Enable custom vkd3d-proton loading (~/Projects/vkd3d-proton/build/vkd3d-proton-master)");
+    eprintln!("  -v            Enable hypervisor loader (LD_PRELOAD=$HOME/.local/lib/liblinuwux.so, sets PROTON_DISABLE_LSTEAMCLIENT=0)");
     eprintln!();
     eprintln!("== Flags that accept values or lists ==");
     eprintln!("  -l LEVEL      Set logging level (-1: silent, 0: normal, 1: verbose)");
@@ -354,6 +356,14 @@ mod tests {
         assert!(!app.fix_audit);
         parse_flags(&mut app, &v(&["-F", "--", "x"])).unwrap();
         assert!(app.fix_audit);
+    }
+
+    #[test]
+    fn hypervisor_flag_enables_ld_preload() {
+        let mut app = App::default();
+        assert!(!app.hypervisor);
+        parse_flags(&mut app, &v(&["-v", "--", "x"])).unwrap();
+        assert!(app.hypervisor);
     }
 
     #[test]

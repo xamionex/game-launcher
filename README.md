@@ -19,19 +19,16 @@ cargo build --release
 binary is located at target/release/game
 
 Optionally symlink it onto your local bin (add this to your path):
-
 ```sh
 ln -s $PWD/target/release/game ~/.local/bin/game
 ```
+
 symlink for dxvk as well:
 ```
 ln -s $PWD/dxvk ~/.config/dxvk
 ```
-symlink for yesyes fix for slssteam, it's loaded from $HOME/scripts, because I'm lazy and never changed it, oops!
-```
-mkdir ~/scripts
-ln -s $PWD/fix.so ~/scripts/fix.so
-```
+
+netsock and the hypervisor loader (liblinuwux.so) are embedded in the binary and self-extract to `$HOME/.config/SLSsteam/tools/` on first use, no setup needed.
 
 ### Handheld / Steam Deck gaming mode
 
@@ -103,8 +100,9 @@ Disabled by default (use the flag to enable):
 | `-e` | Kill mod processes on exit |
 | `-f` | Enable LSFG-VK |
 | `-m` | Enable modding support (adds winhttp override) |
-| `-F` | Enable LD_AUDIT with `$HOME/scripts/fix.so` (merges with user-set LD_AUDIT) |
+| `-F` | Enable LD_AUDIT with `$HOME/.config/SLSsteam/tools/netsock/netsock.so` (self-extracts if missing, merges with user-set LD_AUDIT) |
 | `-V` | Enable custom vkd3d-proton loading |
+| `-v` | Enable hypervisor loader: `LD_PRELOAD=$HOME/.local/lib/liblinuwux.so` and `PROTON_DISABLE_LSTEAMCLIENT=0` (self-extracts if missing) |
 
 Valued flags:
 

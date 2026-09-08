@@ -1,7 +1,7 @@
 //! Environment setup and command wrapping (gamemode, mangohud, protonhax, gamescope, wezterm) plus Wayland/GPU detection.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::{App, EMPTY_MARKER};
@@ -294,25 +294,60 @@ pub fn apply_wrappers(app: &mut App) {
     app.cmd = cmd;
 }
 
-/// Merge `fix.so` into an existing `LD_AUDIT` value (colon-separated).
+/// Merge `netsock.so` into an existing `LD_AUDIT` value (colon-separated).
 ///
-/// Returns the merged value. If `fix_path` is empty, returns `current` unchanged.
-/// If `current` is empty, returns just `fix_path`.
-fn merge_ld_audit(current: &str, fix_path: &str) -> String {
-    if fix_path.is_empty() {
+/// Returns the merged value. If `netsock_path` is empty, returns `current` unchanged.
+/// If `current` is empty, returns just `netsock_path`.
+fn merge_ld_audit(current: &str, netsock_path: &str) -> String {
+    if netsock_path.is_empty() {
         current.to_string()
     } else if current.is_empty() {
-        fix_path.to_string()
+        netsock_path.to_string()
     } else {
-        format!("{fix_path}:{current}")
+        format!("{netsock_path}:{current}")
     }
+}
+
+/// Write an embedded `.so` payload to `path`, creating parent directories.
+///
+/// Logs a warning instead of failing when the write does not succeed; the
+/// launch is not blocked for this.
+fn extract_so(app: &App, bytes: &[u8], path: &Path) {
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            app.log(&format!("Failed to create {}: {e}", parent.display()));
+            return;
+        }
+    }
+    if let Err(e) = std::fs::write(path, bytes) {
+        app.log(&format!("Failed to extract {}: {e}", path.display()));
+    }
+}
+
+/// Target path for the netsock loader: `$HOME/.config/SLSsteam/tools/netsock/netsock.so`.
+fn netsock_path() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .map(|h| Path::new(&h).join(".config/SLSsteam/tools/netsock/netsock.so"))
+        .ok()
+}
+
+/// Target path for the hypervisor loader: `$HOME/.local/lib/liblinuwux.so`.
+fn hypervisor_path() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .map(|h| Path::new(&h).join(".local/lib/liblinuwux.so"))
+        .ok()
 }
 
 /// Apply the captured custom exports, unsetting variables marked `(empty)`.
 ///
-/// After applying exports, if `-F` was set, merge `$HOME/scripts/fix.so` into
-/// `LD_AUDIT` (colon-separated), preserving any value the user set via
+/// After applying exports, `-F` self-extracts the embedded netsock loader to
+/// `$HOME/.config/SLSsteam/tools/netsock/netsock.so` when missing and merges it
+/// into `LD_AUDIT` (colon-separated), preserving any value the user set via
 /// `KEY=VALUE` or inherited from the environment.
+///
+/// `-v` self-extracts the embedded hypervisor loader to
+/// `$HOME/.local/lib/liblinuwux.so` when missing and
+/// sets `LD_PRELOAD` to it plus `PROTON_DISABLE_LSTEAMCLIENT=0`.
 pub fn apply_environment_modifications(app: &App) {
     for export in &app.custom_exports {
         if export.value == EMPTY_MARKER {
@@ -323,14 +358,28 @@ pub fn apply_environment_modifications(app: &App) {
     }
 
     if app.fix_audit {
-        let fix_path = std::env::var("HOME")
-            .map(|h| format!("{h}/scripts/fix.so"))
-            .unwrap_or_else(|_| String::new());
-
-        if !fix_path.is_empty() {
+        if let Some(path) = netsock_path() {
+            if !path.is_file() {
+                app.log(&format!("Extracting netsock loader to {}", path.display()));
+                extract_so(app, include_bytes!("../netsock.so"), &path);
+            }
             let current = std::env::var("LD_AUDIT").unwrap_or_default();
-            let merged = merge_ld_audit(&current, &fix_path);
+            let merged = merge_ld_audit(&current, &path.to_string_lossy());
             std::env::set_var("LD_AUDIT", merged);
+        }
+    }
+
+    if app.hypervisor {
+        if let Some(path) = hypervisor_path() {
+            if !path.is_file() {
+                app.log(&format!(
+                    "Extracting hypervisor loader to {}",
+                    path.display()
+                ));
+                extract_so(app, include_bytes!("../liblinuwux.so"), &path);
+            }
+            std::env::set_var("LD_PRELOAD", path.to_string_lossy().as_ref());
+            std::env::set_var("PROTON_DISABLE_LSTEAMCLIENT", "0");
         }
     }
 }
@@ -340,16 +389,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn merge_ld_audit_prepends_fix_so() {
-        // Empty current -> just fix.so
-        let result = merge_ld_audit("", "/home/user/scripts/fix.so");
-        assert_eq!(result, "/home/user/scripts/fix.so");
+    fn merge_ld_audit_prepends_netsock_so() {
+        // Empty current -> just netsock.so
+        let result = merge_ld_audit("", "/home/user/.config/SLSsteam/tools/netsock/netsock.so");
+        assert_eq!(
+            result,
+            "/home/user/.config/SLSsteam/tools/netsock/netsock.so"
+        );
 
         // Existing value -> prepended with colon
-        let result = merge_ld_audit("/other/lib.so", "/home/user/scripts/fix.so");
-        assert_eq!(result, "/home/user/scripts/fix.so:/other/lib.so");
+        let result = merge_ld_audit(
+            "/other/lib.so",
+            "/home/user/.config/SLSsteam/tools/netsock/netsock.so",
+        );
+        assert_eq!(
+            result,
+            "/home/user/.config/SLSsteam/tools/netsock/netsock.so:/other/lib.so"
+        );
 
-        // Empty fix path -> no change
+        // Empty netsock path -> no change
         let result = merge_ld_audit("/existing.so", "");
         assert_eq!(result, "/existing.so");
 
