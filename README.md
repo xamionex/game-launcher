@@ -9,7 +9,36 @@ Optionally: stages the game into a RAM disk, launches background mods.
 
 The Cargo package is named `game-launcher`; the built binary is named `game` (see `[[bin]]` in `Cargo.toml`).
 
-## Build
+## Automatic Install
+
+The preferred way to install is the curl installer. It downloads the latest
+release binary and installs the dxvk config to `~/.config/dxvk/dxvk.conf`.
+
+Root install (preferred):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh
+```
+
+Installs `game` to `/usr/local/bin/game`. This is the recommended way to
+install, because Steam Deck gaming mode (the gamescope session) does not source
+your shell profiles, so `~/.local/bin` may not be on `PATH` and Steam will fail
+to find the `game` binary. With the root install you can use `game -- %command%`
+in Launch Options without specifying the entire path.
+
+User install:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --user
+```
+
+Installs `game` to `~/.local/bin/game`. Make sure `~/.local/bin` is on your
+`PATH`. Gaming mode may not find it; prefer the root install.
+
+The dxvk config always goes to the invoking user's `~/.config/dxvk/dxvk.conf`,
+even for root installs.
+
+## Manual Install
 
 Requires a Rust toolchain.
 
