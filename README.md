@@ -1,9 +1,12 @@
 # game-launcher
 
-A fast Steam launch wrapper, written in Rust.
+A Steam launch wrapper.
 
-It wraps the game command Steam hands to it (`%command%`), applies optional tools (GameMode, MangoHud, ProtonHax, Gamescope, wezterm),
-sets a curated set of Proton/DXVK/VKD3D environment variables, detects the GPU vendor and Wayland, and writes structured per game logs to `~/logs/game`.
+It wraps the game command Steam hands to it (`%command%`), \
+Applies tools (GameMode, MangoHud, ProtonHax), \
+Sets a curated set of Proton/DXVK/VKD3D environment variables (src/wrappers.rs), \
+Detects the GPU vendor and sets Wayland (amd off, nvidia on), \
+and writes structured per game logs to `~/logs/game`.
 
 Optionally: stages the game into a RAM disk, launches background mods.
 
@@ -20,11 +23,10 @@ Root install (preferred):
 curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh
 ```
 
-Installs `game` to `/usr/local/bin/game`. This is the recommended way to
-install, because Steam Deck gaming mode (the gamescope session) does not source
-your shell profiles, so `~/.local/bin` may not be on `PATH` and Steam will fail
-to find the `game` binary. With the root install you can use `game -- %command%`
-in Launch Options without specifying the entire path.
+Installs `game` to `/usr/local/bin/game`. This is the recommended way to install, \
+because Steam Deck gaming mode (the gamescope session) does not source your shell profiles, \
+so `~/.local/bin` may not be on `PATH` and Steam will fail to find the `game` binary. \
+With the root install you can use `game -- %command%` in Launch Options without specifying the entire path.
 
 User install:
 
@@ -32,11 +34,10 @@ User install:
 curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --user
 ```
 
-Installs `game` to `~/.local/bin/game`. Make sure `~/.local/bin` is on your
-`PATH`. Gaming mode may not find it; prefer the root install.
+Installs `game` to `~/.local/bin/game`. Make sure `~/.local/bin` is on your `PATH`. \
+Gaming mode may not find it, prefer the root install.
 
-The dxvk config always goes to the invoking user's `~/.config/dxvk/dxvk.conf`,
-even for root installs.
+The dxvk config always goes to the invoking user's `~/.config/dxvk/dxvk.conf`, even for root installs.
 
 ## Manual Install
 
@@ -57,16 +58,16 @@ symlink for dxvk as well:
 ln -s $PWD/dxvk ~/.config/dxvk
 ```
 
-netsock and the hypervisor loader (liblinuwux.so) are embedded in the binary and self-extract on first use, no setup needed.
+netsock and the hypervisor loader (liblinuwux.so) are embedded in the binary and self-extract on first use, no setup needed. \
 netsock goes to `$HOME/.config/SLSsteam/tools/netsock/` and the hypervisor to `$HOME/.local/lib/`.
 
-Hypervisor setup and usage guide: https://cs.rin.ru/forum/viewtopic.php?f=20&t=160056
+Hypervisor setup and usage guide: https://cs.rin.ru/forum/viewtopic.php?f=20&t=160056 \
 Hypervisor requires mangohud to be disabled sometimes to fully work. (-hv)
 
 ### Handheld / Steam Deck gaming mode
 
-Gaming mode (the gamescope session) does not source your shell profiles, so `~/.local/bin` may not be on `PATH` and Steam will fail to find the `game` binary.
-If a game fails to start and no log appears in `~/logs/game/`, this is why.
+Gaming mode (the gamescope session) does not source your shell profiles, so `~/.local/bin` may not be on `PATH` and Steam will fail to find the `game` binary. \
+If a game fails to start and no log appears in `~/logs/game/`, this is why. \
 Use the absolute path in Launch Options:
 ```
 /home/deck/.local/bin/game -Fo -- %command%
@@ -76,11 +77,11 @@ or install game to `/usr/local/bin` so that you can still do `game -- %command%`
 sudo ln -s $PWD/target/release/game /usr/local/bin/game
 ```
 
-I've tried different ways to make it appear in path, this is the only one that worked in my testing,
+I've tried different ways to make it appear in path, this is the only one that worked in my testing, \
 let me know if you find a way without root requirement.
 
-Gaming mode is detected automatically and MangoHud is skipped, since the Steam
-overlay already provides a HUD there. Use `-H` to force MangoHud on anyway.
+Gaming mode is detected automatically and MangoHud is skipped, since the Steam overlay already provides a HUD there. \
+Use `-H` to force MangoHud on anyway.
 
 ## Usage
 
@@ -98,9 +99,8 @@ game -s -m LD_PRELOAD=fixes.so -- %command%
 
 ### Environment variables
 
-Any token before `--` shaped like `NAME=value` is exported for the game and
-recorded in the log with its before/after value. An empty value unsets the
-variable:
+Any token before `--` shaped like `NAME=value` is exported for the game and recorded in the log with its before/after value. \
+An empty value unsets the variable:
 
 ```
 game LD_PRELOAD= -- %command%      # unsets LD_PRELOAD
@@ -153,7 +153,7 @@ separate arguments (`-l1` or `-l 1`).
 
 ### Missing wrapper tools
 
-Before launch, each enabled wrapper (`gamemoderun`, `mangohud`, `protonhax`, `gamescope`, `wezterm`) is checked for on `PATH`.
+Before launch, each enabled wrapper (`gamemoderun`, `mangohud`, `protonhax`, `gamescope`, `wezterm`) is checked for on `PATH`. \
 If a wrapper is not installed it is skipped rather than causing a launch failure, and a `Wrapper not found, skipping: <name>` line is written to the log.
 
 ## Logging
@@ -182,14 +182,14 @@ A desktop notification (via `notify-send`, best effort) is sent when:
 
 ## RAM disk (`-R`)
 
-When enabled and the current directory is under a Steam `.../common/...` path,
-the game directory is copied into a tmpfs mount, bind mounted in place, and synced back/unmounted on exit. These steps use `sudo` for mount, rsync, and umount.
+When enabled and the current directory is under a Steam `.../common/...` path, \
+the game directory is copied into a tmpfs mount, bind mounted in place, and synced back/unmounted on exit. These steps use `sudo` for mount, rsync, and umount. \
 Without `-R`, setup is skipped.
 
 ## Mods (`-u`)
 
-Each `-u "command"` runs in the background via `bash -c`.
-With logging enabled, each mod gets its own log file next to the main log.
+Each `-u "command"` runs in the background via `bash -c`. \
+With logging enabled, each mod gets its own log file next to the main log. \
 With `-e`, mod processes are terminated when the wrapper exits.
 
 ## Development
