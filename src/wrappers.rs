@@ -1,4 +1,4 @@
-//! Environment setup and command wrapping (gamemode, mangohud, protonhax, gamescope, wezterm) plus Wayland/GPU detection.
+//! Environment setup and command wrapping (gamemode, mangohud, protonhax, gamescope, wezterm, linuwux) plus Wayland/GPU detection.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -82,10 +82,49 @@ fn command_exists(program: &str) -> bool {
     std::env::split_paths(&path).any(|dir| is_executable(&dir.join(program)))
 }
 
+/// Prepend the LinuwUx hypervisor loader as the outermost wrapper.
+///
+/// LinuwUx must run before MangoHud/Gamescope/etc. — when it ends up inside
+/// another wrapper (e.g. `mangohud linuwux ...`) the game frequently fails to
+/// start. Wrapping the whole chain in `env LD_PRELOAD=...` keeps it at the
+/// front while still handing the loader to the game and its helper processes.
+fn wrap_linuwux(app: &App, cmd: Vec<String>) -> Vec<String> {
+    if !app.hypervisor {
+        return cmd;
+    }
+    let Some(path) = hypervisor_path() else {
+        app.log("LinuwUx: HOME unset, skipping loader");
+        return cmd;
+    };
+    if !path.is_file() {
+        app.log(&format!(
+            "Extracting hypervisor loader to {}",
+            path.display()
+        ));
+        extract_so(app, include_bytes!("../liblinuwux.so"), &path);
+    }
+    if !path.is_file() {
+        return cmd;
+    }
+    let mut out: Vec<String> = vec![
+        "env".to_string(),
+        format!("LD_PRELOAD={}", path.to_string_lossy()),
+        "PROTON_DISABLE_LSTEAMCLIENT=0".to_string(),
+    ];
+    out.extend(cmd);
+    out
+}
+
 /// Prepend a wrapper only if it is enabled and its binary exists.
 ///
 /// When enabled but missing, the wrapper is skipped and the omission is logged.
-fn maybe_wrap(app: &App, cmd: Vec<String>, enabled: bool, program: &str, prefix: &[&str]) -> Vec<String> {
+fn maybe_wrap(
+    app: &App,
+    cmd: Vec<String>,
+    enabled: bool,
+    program: &str,
+    prefix: &[&str],
+) -> Vec<String> {
     if !enabled {
         return cmd;
     }
@@ -291,6 +330,10 @@ pub fn apply_wrappers(app: &mut App) {
     );
     cmd = maybe_wrap(app, cmd, app.gamemode, "gamemoderun", &["gamemoderun"]);
 
+    // LinuwUx must sit at the very front of the chain: `linuwux mangohud ...`
+    // works, but `mangohud linuwux ...` often fails.
+    cmd = wrap_linuwux(app, cmd);
+
     app.cmd = cmd;
 }
 
@@ -345,9 +388,9 @@ fn hypervisor_path() -> Option<PathBuf> {
 /// into `LD_AUDIT` (colon-separated), preserving any value the user set via
 /// `KEY=VALUE` or inherited from the environment.
 ///
-/// `-v` self-extracts the embedded hypervisor loader to
-/// `$HOME/.local/lib/liblinuwux.so` when missing and
-/// sets `LD_PRELOAD` to it plus `PROTON_DISABLE_LSTEAMCLIENT=0`.
+/// The `-v` hypervisor loader is applied earlier, in [`apply_wrappers`], so
+/// that it lands at the front of the command chain instead of leaking into
+/// every wrapper process via a global `LD_PRELOAD`.
 pub fn apply_environment_modifications(app: &App) {
     for export in &app.custom_exports {
         if export.value == EMPTY_MARKER {
@@ -366,20 +409,6 @@ pub fn apply_environment_modifications(app: &App) {
             let current = std::env::var("LD_AUDIT").unwrap_or_default();
             let merged = merge_ld_audit(&current, &path.to_string_lossy());
             std::env::set_var("LD_AUDIT", merged);
-        }
-    }
-
-    if app.hypervisor {
-        if let Some(path) = hypervisor_path() {
-            if !path.is_file() {
-                app.log(&format!(
-                    "Extracting hypervisor loader to {}",
-                    path.display()
-                ));
-                extract_so(app, include_bytes!("../liblinuwux.so"), &path);
-            }
-            std::env::set_var("LD_PRELOAD", path.to_string_lossy().as_ref());
-            std::env::set_var("PROTON_DISABLE_LSTEAMCLIENT", "0");
         }
     }
 }

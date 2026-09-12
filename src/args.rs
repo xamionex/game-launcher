@@ -62,7 +62,7 @@ fn make_export(assignment: &str) -> CustomExport {
 /// Apply a single short flag character to `app`. Returns `Err` for unknown flags.
 fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
     match c {
-        'g' => app.gamemode = false,
+        'g' => app.gamemode = true,
         'h' => app.mangohud = false,
         'H' => app.mangohud_force = true,
         'p' => app.protonhax = false,
@@ -203,7 +203,6 @@ pub fn print_help(prog: &str) {
     eprintln!("Usage: {prog} [options] [VAR=VALUE ...] -- %command%");
     eprintln!();
     eprintln!("== Enabled by default (can be disabled) ==");
-    eprintln!("  -g            Disable GameMode");
     eprintln!("  -h            Disable MangoHud");
     eprintln!("  -H            Force MangoHud on (even in gaming mode)");
     eprintln!("  -p            Disable ProtonHax");
@@ -211,6 +210,7 @@ pub fn print_help(prog: &str) {
     eprintln!("  -X            Force disable Wayland");
     eprintln!();
     eprintln!("== Disabled by default (can be enabled) ==");
+    eprintln!("  -g            Enable GameMode");
     eprintln!("  -P            Enable Pressure Vessel elimination");
     eprintln!("  -L            Enable SDL3 elimination in Steam runtime (sets STEAM_COMPAT_RUNTIME_SDL3=0)");
     eprintln!("  -s            Enable Gamescope (X11 backend)");
@@ -290,7 +290,7 @@ mod tests {
     fn bundled_boolean_flags() {
         let mut app = App::default();
         parse_flags(&mut app, &v(&["-gh", "--", "x"])).unwrap();
-        assert!(!app.gamemode);
+        assert!(app.gamemode);
         assert!(!app.mangohud);
     }
 
@@ -339,7 +339,7 @@ mod tests {
     fn command_without_double_dash() {
         let mut app = App::default();
         parse_flags(&mut app, &v(&["-g", "FOO=1", "/bin/game", "arg"])).unwrap();
-        assert!(!app.gamemode);
+        assert!(app.gamemode);
         assert_eq!(app.custom_exports.len(), 1);
         assert_eq!(app.original_cmd, v(&["/bin/game", "arg"]));
     }
