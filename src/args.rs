@@ -200,6 +200,7 @@ pub fn print_help(prog: &str) {
     crate::config::notify("Invalid Usage, Check your flags", "");
 
     let onlinefix = ONLINEFIX_DLLS.join(";");
+    let modding_support = MODDING_DLLS.join(";");
     eprintln!("Usage: {prog} [options] [VAR=VALUE ...] -- %command%");
     eprintln!();
     eprintln!("== Enabled by default (can be disabled) ==");
@@ -219,7 +220,7 @@ pub fn print_help(prog: &str) {
     eprintln!("  -o            Enable OnlineFix (WINEDLLOVERRIDES={onlinefix})");
     eprintln!("  -e            Cleanup mods on exit");
     eprintln!("  -f            Enable LSFG-VK");
-    eprintln!("  -m            Enable modding support (adds winhttp override)");
+    eprintln!("  -m            Enable modding support (WINEDLLOVERRIDES={modding_support})");
     eprintln!(
         "  -F            Enable LD_AUDIT with $HOME/.config/SLSsteam/tools/netsock/netsock.so (merges with user-set LD_AUDIT)"
     );

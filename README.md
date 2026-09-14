@@ -129,10 +129,10 @@ Disabled by default (use the flag to enable):
 | `-s` | Enable Gamescope (X11 backend) |
 | `-S` | Enable Gamescope (Wayland backend) |
 | `-w` | Run in wezterm |
-| `-o` | Enable OnlineFix DLL overrides |
+| `-o` | Enable OnlineFix DLL overrides (WINEDLLOVERRIDES="OnlineFix64=n,b;SteamOverlay64=n,b;winmm=n,b;dnet=n,b;steam_api64=n,b") |
 | `-e` | Kill mod processes on exit |
 | `-f` | Enable LSFG-VK |
-| `-m` | Enable modding support (adds winhttp override) |
+| `-m` | Enable modding support (WINEDLLOVERRIDES="dwmapi=n,b;winhttp=n,b;winmm=n,b;version=n,b") |
 | `-F` | Enable LD_AUDIT with `$HOME/.config/SLSsteam/tools/netsock/netsock.so` (self-extracts if missing, merges with user-set LD_AUDIT) |
 | `-V` | Enable custom vkd3d-proton loading |
 | `-v` | Enable hypervisor loader: `LD_PRELOAD=$HOME/.local/lib/liblinuwux.so` and `PROTON_DISABLE_LSTEAMCLIENT=0` (self-extracts if missing) |
