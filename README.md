@@ -12,6 +12,11 @@ Optionally: stages the game into a RAM disk, launches background mods.
 
 The Cargo package is named `game-launcher`; the built binary is named `game` (see `[[bin]]` in `Cargo.toml`).
 
+NVIDIA NOTE: If you're using nvidia, this launcher makes your games launch in wayland because performance is usually better in wayland.
+But there are issues with this like: tray icons not going into tray and some apps (launchers) being a white screen.
+To fix this, use this proton-cachyos fork that fixes wayland issues: https://github.com/nanomatters/proton-cachyos/releases/
+If you're having an issue with your games opening on a different monitor use: WAYLANDDRV_PRIMARY_MONITOR=DP-1 (change the id to your primary monitor)
+
 ## Automatic Install
 
 The preferred way to install is the curl installer. It downloads the latest
