@@ -208,6 +208,9 @@ The `wayland_monitor` setting (`-M`) picks the monitor games open on when the Wi
 The editor only shows the row when Wayland is enabled (GPU detection, or `wayland_force_enable`/`wayland_force_disable`), and only lets you pick from the outputs it detects through `wayland-info`, `wlr-randr`, `hyprctl`, `swaymsg`, `kscreen-doctor` or the DRM connectors. \
 The launcher exports it as `WAYLANDDRV_PRIMARY_MONITOR` and, when Wayland is off, ignores it with a log line.
 
+Next to the picker the editor shows `this terminal: <output>`, so the names can be told apart (KWin, Hyprland and Sway can report which output the focused window is on). \
+On the monitor row, `i` refreshes that and lists every detected output with its resolution and position, marking the one the editor is running on.
+
 ## Payloads
 
 Two payloads are fetched from their upstream releases and cached in

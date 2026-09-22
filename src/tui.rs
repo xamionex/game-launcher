@@ -16,6 +16,7 @@ use ratatui::{DefaultTerminal, Frame};
 use toml_edit::{Array, DocumentMut, Item, Value};
 
 use crate::config_file;
+use crate::wrappers::Monitor;
 
 /// One editable setting in the form.
 struct Field {
@@ -289,13 +290,21 @@ struct Editor {
     confirm_quit: bool,
     status: String,
     /// Wayland outputs detected on this machine.
-    monitors: Vec<String>,
+    monitors: Vec<Monitor>,
+    /// Output the editor's own terminal is on, when the compositor knows.
+    active_monitor: Option<String>,
     /// Whether the launcher would enable Wayland based on the GPU alone.
     gpu_wayland: bool,
 }
 
 impl Editor {
-    fn new(path: PathBuf, doc: DocumentMut, monitors: Vec<String>, gpu_wayland: bool) -> Editor {
+    fn new(
+        path: PathBuf,
+        doc: DocumentMut,
+        monitors: Vec<Monitor>,
+        active_monitor: Option<String>,
+        gpu_wayland: bool,
+    ) -> Editor {
         Editor {
             doc,
             path,
@@ -306,6 +315,7 @@ impl Editor {
             confirm_quit: false,
             status: String::new(),
             monitors,
+            active_monitor,
             gpu_wayland,
         }
     }
@@ -407,8 +417,8 @@ impl Editor {
     fn monitor_choices(&self) -> Vec<String> {
         let mut choices = vec![String::new()];
         for monitor in &self.monitors {
-            if !choices.contains(monitor) {
-                choices.push(monitor.clone());
+            if !choices.contains(&monitor.name) {
+                choices.push(monitor.name.clone());
             }
         }
         let current = self.get_text("wayland_monitor");
@@ -418,8 +428,43 @@ impl Editor {
         choices
     }
 
+    /// Ask the compositor which output this terminal is on.
+    fn refresh_active_monitor(&mut self) {
+        self.active_monitor = crate::wrappers::active_monitor();
+    }
+
+    /// Read only note shown next to the picker: where this editor is running.
+    fn terminal_note(&self) -> Option<String> {
+        self.active_monitor
+            .as_deref()
+            .map(|name| format!("this terminal: {name}"))
+    }
+
+    /// Monitor list with the terminal's own output marked, shown in the footer.
+    fn monitor_summary(&self) -> String {
+        if self.monitors.is_empty() {
+            return "No monitors detected".to_string();
+        }
+        let parts: Vec<String> = self
+            .monitors
+            .iter()
+            .map(|monitor| {
+                let mut text = monitor.name.clone();
+                if !monitor.detail.is_empty() {
+                    text.push_str(&format!(" ({})", monitor.detail));
+                }
+                if self.active_monitor.as_deref() == Some(monitor.name.as_str()) {
+                    text.push_str(" [this terminal]");
+                }
+                text
+            })
+            .collect();
+        format!("Monitors: {}", parts.join("  |  "))
+    }
+
     /// Move the Wayland monitor through the detected outputs.
     fn step_monitor(&mut self, delta: i64) {
+        self.refresh_active_monitor();
         let choices = self.monitor_choices();
         if choices.len() <= 1 {
             self.status = "No Wayland monitors detected".to_string();
@@ -621,6 +666,10 @@ impl Editor {
             }
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::Char('i') if FIELDS[self.selected_field()].key == "wayland_monitor" => {
+                self.refresh_active_monitor();
+                self.status = self.monitor_summary();
+            }
             KeyCode::PageUp => self.move_selection(-5),
             KeyCode::PageDown => self.move_selection(5),
             KeyCode::Home => self.jump_to_first(),
@@ -832,12 +881,20 @@ impl Editor {
                     } else {
                         format!("{:>3}", field.flag)
                     };
-                    ListItem::new(Line::from(vec![
+                    let mut spans = vec![
                         Span::raw(format!("{:<22}", field.label)),
                         Span::styled(flag, Style::new().dim()),
                         Span::raw("  "),
                         self.value_span(field.key),
-                    ]))
+                    ];
+                    // Read only hint: which monitor this editor is running on.
+                    if field.key == "wayland_monitor" {
+                        if let Some(note) = self.terminal_note() {
+                            spans.push(Span::raw("   "));
+                            spans.push(Span::styled(note, Style::new().dim()));
+                        }
+                    }
+                    ListItem::new(Line::from(spans))
                 }
             })
             .collect();
@@ -960,8 +1017,12 @@ impl Editor {
             Mode::EditList => "up/down select   enter edit   a add   d delete   esc back",
             Mode::Form => "up/down select   space toggle/cycle   enter edit   s save   q quit",
         };
-        let help = if field.key == "wayland_monitor" && self.monitors.is_empty() {
-            format!("{}. No monitors detected.", field.help)
+        let help = if field.key == "wayland_monitor" {
+            let mut text = format!("{}. Press i to list the monitors.", field.help);
+            if self.monitors.is_empty() {
+                text.push_str(" No monitors detected.");
+            }
+            text
         } else if let (Kind::List, example) = (self.kind(field.key), list_example(field.key)) {
             if example.is_empty() {
                 field.help.to_string()
@@ -1061,10 +1122,11 @@ pub fn run() -> Result<(), String> {
 
     // Detection runs once; the force flags from the document are applied on top of the GPU result when the row is rendered.
     let monitors = crate::wrappers::detect_monitors();
+    let active_monitor = crate::wrappers::active_monitor();
     let mut probe = crate::config::App::default();
     crate::wrappers::determine_wayland_by_gpu(&mut probe);
 
-    let mut editor = Editor::new(path, doc, monitors, probe.wayland_enabled);
+    let mut editor = Editor::new(path, doc, monitors, active_monitor, probe.wayland_enabled);
     editor.jump_to_first();
     if let Some(warning) = warning {
         editor.status = warning;
@@ -1079,6 +1141,17 @@ pub fn run() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shorthand for monitor fixtures.
+    fn test_monitors(names: &[&str]) -> Vec<Monitor> {
+        names
+            .iter()
+            .map(|name| Monitor {
+                name: name.to_string(),
+                detail: String::new(),
+            })
+            .collect()
+    }
 
     #[test]
     fn field_keys_match_default_config() {
@@ -1135,7 +1208,7 @@ mod tests {
         let defaults = config_file::default_document();
         complete_document(&mut doc, &defaults);
 
-        let mut editor = Editor::new(path.clone(), doc, Vec::new(), false);
+        let mut editor = Editor::new(path.clone(), doc, Vec::new(), None, false);
         // Select MangoHud, a boolean, and toggle it.
         editor.select_key("mangohud");
         editor.activate();
@@ -1158,7 +1231,7 @@ mod tests {
         let path = dir.join("config.toml");
 
         let doc = config_file::default_document();
-        let mut editor = Editor::new(path, doc, Vec::new(), false);
+        let mut editor = Editor::new(path, doc, Vec::new(), None, false);
         editor.mode = Mode::EditText(TextEdit {
             key: "logging_level".to_string(),
             entry: None,
@@ -1178,7 +1251,7 @@ mod tests {
     fn choice_setting_cycles_only_through_allowed_values() {
         let dir = std::env::temp_dir().join(format!("game_tui_choice_{}", std::process::id()));
         let doc = config_file::default_document();
-        let mut editor = Editor::new(dir.join("config.toml"), doc, Vec::new(), false);
+        let mut editor = Editor::new(dir.join("config.toml"), doc, Vec::new(), None, false);
         editor.select_key("logging_level");
 
         assert_eq!(editor.get_integer("logging_level"), 0);
@@ -1194,7 +1267,7 @@ mod tests {
     fn instances_is_edited_as_a_number_and_rejects_negatives() {
         let dir = std::env::temp_dir().join(format!("game_tui_inst_{}", std::process::id()));
         let doc = config_file::default_document();
-        let mut editor = Editor::new(dir.join("config.toml"), doc, Vec::new(), false);
+        let mut editor = Editor::new(dir.join("config.toml"), doc, Vec::new(), None, false);
         editor.select_key("instances");
 
         // Space on a non-choice integer opens the text editor.
@@ -1221,7 +1294,8 @@ mod tests {
         let mut editor = Editor::new(
             dir.join("config.toml"),
             doc,
-            vec!["DP-1".to_string()],
+            test_monitors(&["DP-1"]),
+            None,
             false,
         );
         assert!(!editor.visible_keys().contains(&"wayland_monitor"));
@@ -1250,8 +1324,8 @@ mod tests {
     fn wayland_monitor_cycles_detected_outputs_only() {
         let dir = std::env::temp_dir().join(format!("game_tui_wlm_{}", std::process::id()));
         let doc = config_file::default_document();
-        let monitors = vec!["DP-1".to_string(), "DP-2".to_string()];
-        let mut editor = Editor::new(dir.join("config.toml"), doc, monitors, true);
+        let monitors = test_monitors(&["DP-1", "DP-2"]);
+        let mut editor = Editor::new(dir.join("config.toml"), doc, monitors, None, true);
         editor.select_key("wayland_monitor");
 
         assert_eq!(editor.get_text("wayland_monitor"), "");
@@ -1280,7 +1354,13 @@ mod tests {
     fn wayland_monitor_keeps_a_configured_but_undetected_value() {
         let dir = std::env::temp_dir().join(format!("game_tui_wlk_{}", std::process::id()));
         let doc = config_file::default_document();
-        let mut editor = Editor::new(dir.join("config.toml"), doc, vec!["DP-1".to_string()], true);
+        let mut editor = Editor::new(
+            dir.join("config.toml"),
+            doc,
+            test_monitors(&["DP-1"]),
+            None,
+            true,
+        );
         editor.set_value("wayland_monitor", Value::from("HDMI-A-1"));
 
         let choices = editor.monitor_choices();
@@ -1291,12 +1371,65 @@ mod tests {
     fn wayland_monitor_reports_when_nothing_is_detected() {
         let dir = std::env::temp_dir().join(format!("game_tui_wln_{}", std::process::id()));
         let doc = config_file::default_document();
-        let mut editor = Editor::new(dir.join("config.toml"), doc, Vec::new(), true);
+        let mut editor = Editor::new(dir.join("config.toml"), doc, Vec::new(), None, true);
         editor.select_key("wayland_monitor");
         editor.activate();
 
         assert_eq!(editor.get_text("wayland_monitor"), "");
         assert!(editor.status.contains("No Wayland monitors"));
         assert!(!editor.dirty);
+    }
+
+    #[test]
+    fn terminal_note_names_the_current_monitor() {
+        let dir = std::env::temp_dir().join(format!("game_tui_wlt_{}", std::process::id()));
+        let doc = config_file::default_document();
+        let mut editor = Editor::new(
+            dir.join("config.toml"),
+            doc,
+            test_monitors(&["DP-1", "DP-2"]),
+            Some("DP-2".to_string()),
+            true,
+        );
+
+        assert_eq!(
+            editor.terminal_note(),
+            Some("this terminal: DP-2".to_string())
+        );
+        editor.active_monitor = None;
+        assert_eq!(editor.terminal_note(), None);
+    }
+
+    #[test]
+    fn monitor_summary_lists_every_output_and_marks_this_terminal() {
+        let dir = std::env::temp_dir().join(format!("game_tui_wls_{}", std::process::id()));
+        let doc = config_file::default_document();
+        let mut monitors = test_monitors(&["DP-2", "DP-1"]);
+        monitors[0].detail = "1920x1080 at 0,0".to_string();
+        let mut editor = Editor::new(
+            dir.join("config.toml"),
+            doc,
+            monitors,
+            Some("DP-1".to_string()),
+            true,
+        );
+
+        let summary = editor.monitor_summary();
+        assert!(summary.contains("DP-2 (1920x1080 at 0,0)"), "{summary}");
+        assert!(summary.contains("DP-1 [this terminal]"), "{summary}");
+
+        // The i key refreshes and shows the list in the status line.
+        editor.select_key("wayland_monitor");
+        assert!(editor
+            .handle_form(KeyEvent::from(KeyCode::Char('i')))
+            .is_ok());
+        assert!(
+            editor.status.starts_with("Monitors: "),
+            "unexpected status: {}",
+            editor.status
+        );
+
+        editor.monitors.clear();
+        assert_eq!(editor.monitor_summary(), "No monitors detected");
     }
 }

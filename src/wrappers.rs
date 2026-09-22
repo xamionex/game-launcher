@@ -123,35 +123,127 @@ fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// wl_output names from `wayland-info`, one block per monitor:
+/// A Wayland output, with a short description when the source provides one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Monitor {
+    pub name: String,
+    /// Resolution and position, e.g. `1920x1080 at 1920,0`; empty when unknown.
+    pub detail: String,
+}
+
+impl Monitor {
+    fn new(name: &str) -> Monitor {
+        Monitor {
+            name: name.to_string(),
+            detail: String::new(),
+        }
+    }
+}
+
+/// Compose a detail string from optional mode and position parts.
+fn monitor_detail(mode: &str, position: &str) -> String {
+    match (mode.is_empty(), position.is_empty()) {
+        (false, false) => format!("{mode} at {position}"),
+        (false, true) => mode.to_string(),
+        (true, false) => format!("at {position}"),
+        (true, true) => String::new(),
+    }
+}
+
+/// Parse one `wl_output` block of `wayland-info` output.
+fn monitor_from_wayland_info_block(lines: &[&str]) -> Monitor {
+    let mut monitor = Monitor::new("");
+    let mut position = String::new();
+
+    for (index, line) in lines.iter().enumerate() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("name:") {
+            monitor.name = value.trim().trim_matches('\'').trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("x:") {
+            // "1920, y: 0, scale: 1,"
+            let parts: Vec<&str> = rest.split(',').collect();
+            let x = parts.first().map(|p| p.trim()).unwrap_or("");
+            let y = parts
+                .get(1)
+                .and_then(|p| p.trim().strip_prefix("y:"))
+                .map(str::trim)
+                .unwrap_or("");
+            if !x.is_empty() && !y.is_empty() {
+                position = format!("{x},{y}");
+            }
+        } else if let Some(rest) = line.strip_prefix("width:") {
+            // The current mode is the one whose flags line says so.
+            let current = lines
+                .get(index + 1)
+                .map(|flags| flags.contains("flags:") && flags.contains("current"))
+                .unwrap_or(false);
+            if current {
+                let width = rest.split_whitespace().next().unwrap_or("");
+                let height = line
+                    .split("height:")
+                    .nth(1)
+                    .and_then(|h| h.split_whitespace().next())
+                    .unwrap_or("");
+                if !width.is_empty() && !height.is_empty() {
+                    monitor.detail = monitor_detail(&format!("{width}x{height}"), &position);
+                }
+            }
+        }
+    }
+
+    if !position.is_empty() && monitor.detail.is_empty() {
+        monitor.detail = monitor_detail("", &position);
+    }
+    monitor
+}
+
+/// wl_output entries from `wayland-info`, one block per monitor:
 ///
 /// ```text
 /// interface: 'wl_output', version: 4, name: 65
 ///     name: DP-1
+///     x: 1920, y: 0, scale: 1,
+///     mode:
+///         width: 1920 px, height: 1080 px, refresh: 165.001 Hz,
+///         flags: current
 /// ```
-fn monitors_from_wayland_info(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
+fn monitors_from_wayland_info(text: &str) -> Vec<Monitor> {
+    let mut out: Vec<Monitor> = Vec::new();
+    let mut block: Vec<&str> = Vec::new();
     let mut in_output = false;
+
     for line in text.lines() {
         if line.starts_with("interface:") {
+            if in_output {
+                push_wayland_info_block(&block, &mut out);
+            }
+            block.clear();
             in_output = line.contains("'wl_output'");
             continue;
         }
-        if !in_output {
-            continue;
+        if in_output {
+            block.push(line);
         }
-        if let Some(name) = line.trim_start().strip_prefix("name:") {
-            let name = name.trim().trim_matches('\'').trim();
-            if !name.is_empty() && !out.contains(&name.to_string()) {
-                out.push(name.to_string());
-            }
-        }
+    }
+    if in_output {
+        push_wayland_info_block(&block, &mut out);
     }
     out
 }
 
+/// Parse a block and keep it when it names an output that is not already listed.
+fn push_wayland_info_block(block: &[&str], out: &mut Vec<Monitor>) {
+    if block.is_empty() {
+        return;
+    }
+    let monitor = monitor_from_wayland_info_block(block);
+    if !monitor.name.is_empty() && !out.contains(&monitor) {
+        out.push(monitor);
+    }
+}
+
 /// Monitor names from the JSON listings of `wlr-randr --json`, `hyprctl monitors -j` and `swaymsg -t get_outputs`, which are all arrays of objects carrying a `name`.
-fn monitors_from_json(text: &str) -> Vec<String> {
+fn monitors_from_json(text: &str) -> Vec<Monitor> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         return Vec::new();
     };
@@ -161,21 +253,21 @@ fn monitors_from_json(text: &str) -> Vec<String> {
             items
                 .iter()
                 .filter_map(|item| item.get("name").and_then(|n| n.as_str()))
-                .map(str::to_string)
+                .map(Monitor::new)
                 .collect()
         })
         .unwrap_or_default()
 }
 
-/// Connected output names from `kscreen-doctor -o`.
+/// Connected outputs from `kscreen-doctor -o`.
 ///
-/// Each block starts with `Output: <id> <name> <uuid>` and reports `connected` or `disconnected` on a following line; the output is colored with ANSI escapes, which are stripped before parsing.
-fn monitors_from_kscreen(text: &str) -> Vec<String> {
+/// Each block starts with `Output: <id> <name> <uuid>`, reports `connected` or `disconnected` on a following line and carries `Geometry: x,y WxH`. The output is colored with ANSI escapes, which are stripped before parsing.
+fn monitors_from_kscreen(text: &str) -> Vec<Monitor> {
     let ansi = Regex::new("\u{1b}\\[[0-9;]*m").unwrap();
     let clean = ansi.replace_all(text, "");
     let lines: Vec<&str> = clean.lines().collect();
 
-    let mut out = Vec::new();
+    let mut out: Vec<Monitor> = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         let Some(rest) = line.trim().strip_prefix("Output:") else {
             continue;
@@ -187,19 +279,37 @@ fn monitors_from_kscreen(text: &str) -> Vec<String> {
             .iter()
             .take(3)
             .any(|l| l.trim() == "connected");
-        if connected && !out.contains(&name.to_string()) {
-            out.push(name.to_string());
+        if !connected || out.iter().any(|m| m.name == name) {
+            continue;
         }
+
+        let mut monitor = Monitor::new(name);
+        if let Some(geometry) = lines[index + 1..]
+            .iter()
+            .take(12)
+            .find(|l| l.trim_start().starts_with("Geometry:"))
+        {
+            // "Geometry: 1920,0 1920x1080"
+            let parts: Vec<&str> = geometry
+                .trim_start()
+                .trim_start_matches("Geometry:")
+                .split_whitespace()
+                .collect();
+            if parts.len() >= 2 {
+                monitor.detail = monitor_detail(parts[1], parts[0]);
+            }
+        }
+        out.push(monitor);
     }
     out
 }
 
 /// Connected connector names from `/sys/class/drm`, e.g. `card1-DP-1` -> `DP-1`.
-fn monitors_from_drm() -> Vec<String> {
+fn monitors_from_drm() -> Vec<Monitor> {
     let Ok(entries) = std::fs::read_dir("/sys/class/drm") else {
         return Vec::new();
     };
-    let mut out = Vec::new();
+    let mut out: Vec<Monitor> = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
@@ -212,24 +322,24 @@ fn monitors_from_drm() -> Vec<String> {
         let Some((_, connector)) = name.split_once('-') else {
             continue;
         };
-        if connector.is_empty() || out.contains(&connector.to_string()) {
+        if connector.is_empty() || out.iter().any(|m| m.name == connector) {
             continue;
         }
-        out.push(connector.to_string());
+        out.push(Monitor::new(connector));
     }
-    out.sort();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
 
-/// Wayland output names known to the session.
+/// Wayland outputs known to the session.
 ///
 /// Compositor tools are tried in order and the DRM connectors are used as a last resort, so there is normally something to pick from.
-pub fn detect_monitors() -> Vec<String> {
+pub fn detect_monitors() -> Vec<Monitor> {
     /// A detection source: program, arguments, and stdout parser.
     type Source = (
         &'static str,
         &'static [&'static str],
-        fn(&str) -> Vec<String>,
+        fn(&str) -> Vec<Monitor>,
     );
 
     let attempts: &[Source] = &[
@@ -241,13 +351,72 @@ pub fn detect_monitors() -> Vec<String> {
     ];
     for (program, args, parse) in attempts {
         if let Some(stdout) = command_stdout(program, args) {
-            let names = parse(&stdout);
-            if !names.is_empty() {
-                return names;
+            let monitors = parse(&stdout);
+            if !monitors.is_empty() {
+                return monitors;
             }
         }
     }
     monitors_from_drm()
+}
+
+/// The output the focused window is on, when the compositor can tell us.
+///
+/// This is how the config editor learns which monitor its own terminal is on, so the names in the picker can be told apart.
+pub fn active_monitor() -> Option<String> {
+    // KWin (Plasma): the output of the active window.
+    for program in ["qdbus6", "qdbus"] {
+        if let Some(out) = command_stdout(
+            program,
+            &["org.kde.KWin", "/KWin", "org.kde.KWin.activeOutputName"],
+        ) {
+            let name = out.trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+
+    // Hyprland: the monitor of the active workspace.
+    if let Some(out) = command_stdout("hyprctl", &["activeworkspace", "-j"]) {
+        if let Some(name) = json_string_field(&out, "monitor") {
+            return Some(name);
+        }
+    }
+
+    // Sway: the output of the focused workspace.
+    if let Some(out) = command_stdout("swaymsg", &["-t", "get_workspaces"]) {
+        if let Some(name) = focused_workspace_output(&out) {
+            return Some(name);
+        }
+    }
+
+    None
+}
+
+/// Read a top-level string field from a JSON object.
+fn json_string_field(text: &str, field: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let found = value.get(field)?.as_str()?.trim();
+    if found.is_empty() {
+        None
+    } else {
+        Some(found.to_string())
+    }
+}
+
+/// Output of the focused workspace in `swaymsg -t get_workspaces` output.
+fn focused_workspace_output(text: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let workspaces = value.as_array()?;
+    workspaces
+        .iter()
+        .find(|workspace| workspace.get("focused").and_then(|f| f.as_bool()) == Some(true))
+        .and_then(|workspace| workspace.get("output"))
+        .and_then(|output| output.as_str())
+        .map(str::trim)
+        .filter(|output| !output.is_empty())
+        .map(str::to_string)
 }
 
 /// The Wayland monitor to export, if Wayland is on and one is configured.
@@ -638,6 +807,14 @@ pub fn apply_environment_modifications(app: &App) {
 mod tests {
     use super::*;
 
+    /// Shorthand for the monitor assertions.
+    fn monitor(name: &str, detail: &str) -> Monitor {
+        Monitor {
+            name: name.to_string(),
+            detail: detail.to_string(),
+        }
+    }
+
     #[test]
     fn merge_ld_audit_prepends_netsock_so() {
         // Empty current -> just netsock.so
@@ -697,22 +874,39 @@ interface: 'wl_drm',                              version:  2, name: 12
 interface: 'wl_output',                           version:  4, name: 65
 \tname: DP-1
 \tdescription: Promotion and Display Technology Ltd. 27GM620BF DP-1
+\tx: 1920, y: 0, scale: 1,
 \tmode:
+\t\twidth: 1024 px, height: 768 px, refresh: 60.000 Hz,
+\t\tflags:
 \t\twidth: 1920 px, height: 1080 px, refresh: 165.001 Hz,
+\t\tflags: current
 interface: 'kde_output_order_v1',                 version:  1, name: 68
 interface: 'wl_output',                           version:  4, name: 66
 \tname: DP-2
+\tx: 0, y: 0, scale: 1,
+\tmode:
+\t\twidth: 1920 px, height: 1080 px, refresh: 60.000 Hz,
+\t\tflags: current
 ";
-        assert_eq!(monitors_from_wayland_info(text), vec!["DP-1", "DP-2"]);
+        assert_eq!(
+            monitors_from_wayland_info(text),
+            vec![
+                monitor("DP-1", "1920x1080 at 1920,0"),
+                monitor("DP-2", "1920x1080 at 0,0"),
+            ]
+        );
     }
 
     #[test]
     fn json_monitors_are_parsed() {
         let hyprctl = r#"[{"id":0,"name":"DP-1","description":"Dell","monitor":"DP-1"}]"#;
-        assert_eq!(monitors_from_json(hyprctl), vec!["DP-1"]);
+        assert_eq!(monitors_from_json(hyprctl), vec![monitor("DP-1", "")]);
 
         let wlr_randr = r#"[{"name":"eDP-1","enabled":true},{"name":"HDMI-A-1","enabled":false}]"#;
-        assert_eq!(monitors_from_json(wlr_randr), vec!["eDP-1", "HDMI-A-1"]);
+        assert_eq!(
+            monitors_from_json(wlr_randr),
+            vec![monitor("eDP-1", ""), monitor("HDMI-A-1", "")]
+        );
 
         assert!(monitors_from_json("not json").is_empty());
     }
@@ -723,11 +917,43 @@ interface: 'wl_output',                           version:  4, name: 66
 \u{1b}[01;32mOutput: \u{1b}[0;0m1 DP-2 20ea350b-uuid
 \t\u{1b}[01;32menabled\u{1b}[0;0m
 \t\u{1b}[01;32mconnected\u{1b}[0;0m
+\t\u{1b}[01;33mGeometry: \u{1b}[0;0m0,0 1920x1080
 \u{1b}[01;32mOutput: \u{1b}[0;0m2 DP-1 4f508cbc-uuid
 \t\u{1b}[01;32menabled\u{1b}[0;0m
 \t\u{1b}[01;33mdisconnected\u{1b}[0;0m
+\t\u{1b}[01;33mGeometry: \u{1b}[0;0m1920,0 1920x1080
 ";
-        assert_eq!(monitors_from_kscreen(text), vec!["DP-2"]);
+        assert_eq!(
+            monitors_from_kscreen(text),
+            vec![monitor("DP-2", "1920x1080 at 0,0")]
+        );
+    }
+
+    #[test]
+    fn monitor_detail_is_composed_from_what_is_known() {
+        assert_eq!(monitor_detail("1920x1080", "0,0"), "1920x1080 at 0,0");
+        assert_eq!(monitor_detail("1920x1080", ""), "1920x1080");
+        assert_eq!(monitor_detail("", "0,0"), "at 0,0");
+        assert_eq!(monitor_detail("", ""), "");
+    }
+
+    #[test]
+    fn hyprland_active_monitor_is_parsed() {
+        let text = r#"{"id":1,"name":"1","monitor":"DP-2","windows":2}"#;
+        assert_eq!(json_string_field(text, "monitor"), Some("DP-2".to_string()));
+        assert_eq!(json_string_field("{}", "monitor"), None);
+        assert_eq!(json_string_field(r#"{"monitor":""}"#, "monitor"), None);
+        assert_eq!(json_string_field("not json", "monitor"), None);
+    }
+
+    #[test]
+    fn sway_focused_output_is_parsed() {
+        let text = r#"[{"name":"1","focused":false,"output":"DP-2"},{"name":"2","focused":true,"output":"DP-1"}]"#;
+        assert_eq!(focused_workspace_output(text), Some("DP-1".to_string()));
+
+        let none_focused = r#"[{"name":"1","focused":false,"output":"DP-2"}]"#;
+        assert_eq!(focused_workspace_output(none_focused), None);
+        assert_eq!(focused_workspace_output("not json"), None);
     }
 
     #[test]
