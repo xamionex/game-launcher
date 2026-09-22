@@ -16,7 +16,7 @@ pub enum ParseError {
 
 /// Short flags that take a value argument.
 fn takes_value(c: char) -> bool {
-    matches!(c, 'i' | 'l' | 'u' | 'r' | 'd')
+    matches!(c, 'i' | 'l' | 'u' | 'r' | 'd' | 'M')
 }
 
 /// True when `token` looks like an environment assignment `NAME=...`.
@@ -93,6 +93,7 @@ fn apply_value_flag(app: &mut App, c: char, value: String) -> Result<(), ParseEr
         }
         'u' => app.mods_to_launch.push(value),
         'r' => app.replacement_exe = value,
+        'M' => app.wayland_monitor = value,
         'd' => {
             app.winedlloverrides_list
                 .extend(value.split(';').map(|s| s.to_string()));
@@ -202,7 +203,9 @@ pub fn print_help(prog: &str) {
     eprintln!("  -e            Cleanup mods on exit");
     eprintln!("  -f            Enable LSFG-VK");
     eprintln!("  -m            Enable modding support (WINEDLLOVERRIDES={modding_support})");
-    eprintln!("  -F            Enable LD_AUDIT with $HOME/.config/SLSsteam/tools/netsock/netsock.so");
+    eprintln!(
+        "  -F            Enable LD_AUDIT with $HOME/.config/SLSsteam/tools/netsock/netsock.so"
+    );
     eprintln!("  -V            Enable custom vkd3d-proton loading (~/Projects/vkd3d-proton/build/vkd3d-proton-master)");
     eprintln!("  -v            Enable hypervisor loader (LD_PRELOAD=$HOME/.local/lib/liblinuwux.so, sets PROTON_DISABLE_LSTEAMCLIENT=0)");
     eprintln!("                Might require you to disable mangohud with -h");
@@ -216,6 +219,7 @@ pub fn print_help(prog: &str) {
     eprintln!("  -u MOD        Add a mod to be launched (can be used multiple times)");
     eprintln!("  -r EXE        Replace the default executable");
     eprintln!("  -d DLLS       Add DLL overrides (semicolon-separated, e.g. dinput8=n,b;dxgi=n,b)");
+    eprintln!("  -M MONITOR    Set the Wine Wayland primary monitor (e.g. DP-1, see -C to pick from detected ones)");
     eprintln!("  -i N          Number of instances");
     eprintln!();
     eprintln!("== Environment variables ==");
@@ -325,6 +329,24 @@ mod tests {
         let mut app = App::default();
         parse_flags(&mut app, &v(&["-d", "dinput8=n,b;dxgi=n,b", "--", "x"])).unwrap();
         assert_eq!(app.winedlloverrides_list, v(&["dinput8=n,b", "dxgi=n,b"]));
+    }
+
+    #[test]
+    fn wayland_monitor_flag_takes_a_value() {
+        let mut app = App::default();
+        assert_eq!(app.wayland_monitor, "");
+        parse_flags(&mut app, &v(&["-M", "DP-1", "--", "x"])).unwrap();
+        assert_eq!(app.wayland_monitor, "DP-1");
+
+        let mut attached = App::default();
+        parse_flags(&mut attached, &v(&["-MDP-2", "--", "x"])).unwrap();
+        assert_eq!(attached.wayland_monitor, "DP-2");
+
+        let mut app2 = App::default();
+        assert!(matches!(
+            parse_flags(&mut app2, &v(&["-M", "--", "x"])),
+            Err(ParseError::Usage)
+        ));
     }
 
     #[test]

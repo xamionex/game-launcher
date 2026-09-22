@@ -203,6 +203,13 @@ const FIELDS: &[Field] = &[
         section: "Values",
     },
     Field {
+        key: "wayland_monitor",
+        label: "Wayland monitor",
+        flag: "-M",
+        help: "Primary monitor for the Wine Wayland driver (WAYLANDDRV_PRIMARY_MONITOR)",
+        section: "Wayland",
+    },
+    Field {
         key: "dll_overrides",
         label: "DLL overrides",
         flag: "-d",
@@ -281,10 +288,14 @@ struct Editor {
     dirty: bool,
     confirm_quit: bool,
     status: String,
+    /// Wayland outputs detected on this machine.
+    monitors: Vec<String>,
+    /// Whether the launcher would enable Wayland based on the GPU alone.
+    gpu_wayland: bool,
 }
 
 impl Editor {
-    fn new(path: PathBuf, doc: DocumentMut) -> Editor {
+    fn new(path: PathBuf, doc: DocumentMut, monitors: Vec<String>, gpu_wayland: bool) -> Editor {
         Editor {
             doc,
             path,
@@ -294,6 +305,8 @@ impl Editor {
             dirty: false,
             confirm_quit: false,
             status: String::new(),
+            monitors,
+            gpu_wayland,
         }
     }
 
@@ -361,6 +374,9 @@ impl Editor {
         let mut entries = Vec::new();
         let mut section = "";
         for (i, field) in FIELDS.iter().enumerate() {
+            if !self.is_visible(field.key) {
+                continue;
+            }
             if field.section != section {
                 section = field.section;
                 entries.push(Entry::Section(section));
@@ -368,6 +384,53 @@ impl Editor {
             entries.push(Entry::Field(i));
         }
         entries
+    }
+
+    /// The Wayland monitor row only exists when Wayland is in use.
+    fn is_visible(&self, key: &str) -> bool {
+        key != "wayland_monitor" || self.wayland_active()
+    }
+
+    /// Whether the launcher would enable Wayland on this system, honoring the force flags from the document.
+    fn wayland_active(&self) -> bool {
+        if self.get_bool("wayland_force_enable") {
+            return true;
+        }
+        if self.get_bool("wayland_force_disable") {
+            return false;
+        }
+        self.gpu_wayland
+    }
+
+    /// Selectable values for the Wayland monitor: unset plus every detected output.
+    /// A monitor that is configured but not currently detected is kept, so cycling never silently drops it.
+    fn monitor_choices(&self) -> Vec<String> {
+        let mut choices = vec![String::new()];
+        for monitor in &self.monitors {
+            if !choices.contains(monitor) {
+                choices.push(monitor.clone());
+            }
+        }
+        let current = self.get_text("wayland_monitor");
+        if !current.is_empty() && !choices.contains(&current) {
+            choices.push(current);
+        }
+        choices
+    }
+
+    /// Move the Wayland monitor through the detected outputs.
+    fn step_monitor(&mut self, delta: i64) {
+        let choices = self.monitor_choices();
+        if choices.len() <= 1 {
+            self.status = "No Wayland monitors detected".to_string();
+            return;
+        }
+        let current = self.get_text("wayland_monitor");
+        let index = choices.iter().position(|c| *c == current).unwrap_or(0) as i64;
+        let len = choices.len() as i64;
+        let next = (index + delta).rem_euclid(len) as usize;
+        let value = choices[next].clone();
+        self.set_value("wayland_monitor", Value::from(value));
     }
 
     /// Index of the currently selected field in [`FIELDS`].
@@ -433,11 +496,35 @@ impl Editor {
         }
     }
 
+    /// Keys currently shown by the form (used by tests).
+    #[cfg(test)]
+    fn visible_keys(&self) -> Vec<&'static str> {
+        self.entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Field(index) => Some(FIELDS[*index].key),
+                Entry::Section(_) => None,
+            })
+            .collect()
+    }
+
+    /// Keep the cursor on a selectable row, e.g. after a row was hidden.
+    fn normalize_selection(&mut self) {
+        if matches!(self.entries().get(self.selection), Some(Entry::Field(_))) {
+            return;
+        }
+        self.jump_to_first();
+    }
+
     // ---- actions ----
 
     /// Toggle a boolean, cycle a choice, or open the right editor.
     fn activate(&mut self) {
         let field = &FIELDS[self.selected_field()];
+        if field.key == "wayland_monitor" {
+            self.step_monitor(1);
+            return;
+        }
         match self.kind(field.key) {
             Kind::Bool => {
                 let value = self.get_bool(field.key);
@@ -549,6 +636,10 @@ impl Editor {
     /// Move a choice setting to its previous or next allowed value.
     fn cycle_choice(&mut self, delta: i64) {
         let field = &FIELDS[self.selected_field()];
+        if field.key == "wayland_monitor" {
+            self.step_monitor(delta);
+            return;
+        }
         let choices = choices_for(field.key);
         if choices.is_empty() {
             return;
@@ -728,6 +819,7 @@ impl Editor {
     }
 
     fn render_form(&mut self, frame: &mut Frame, area: Rect) {
+        self.normalize_selection();
         let entries = self.entries();
         let items: Vec<ListItem> = entries
             .iter()
@@ -783,6 +875,14 @@ impl Editor {
                     format!("[{} items]", items.len()),
                     Style::new().fg(Color::Magenta),
                 )
+            }
+            Kind::Text if key == "wayland_monitor" => {
+                let monitor = self.get_text(key);
+                if monitor.is_empty() {
+                    Span::styled("(unset)", Style::new().dim())
+                } else {
+                    Span::styled(monitor, Style::new().fg(Color::Cyan))
+                }
             }
             Kind::Text => {
                 let text = self.get_text(key);
@@ -860,11 +960,16 @@ impl Editor {
             Mode::EditList => "up/down select   enter edit   a add   d delete   esc back",
             Mode::Form => "up/down select   space toggle/cycle   enter edit   s save   q quit",
         };
-        let help = match (self.kind(field.key), list_example(field.key)) {
-            (Kind::List, example) if !example.is_empty() => {
+        let help = if field.key == "wayland_monitor" && self.monitors.is_empty() {
+            format!("{}. No monitors detected.", field.help)
+        } else if let (Kind::List, example) = (self.kind(field.key), list_example(field.key)) {
+            if example.is_empty() {
+                field.help.to_string()
+            } else {
                 format!("{} (e.g. {example})", field.help)
             }
-            _ => field.help.to_string(),
+        } else {
+            field.help.to_string()
         };
         let lines = vec![
             Line::from(help),
@@ -948,7 +1053,12 @@ pub fn run() -> Result<(), String> {
     let defaults = config_file::default_document();
     complete_document(&mut doc, &defaults);
 
-    let mut editor = Editor::new(path, doc);
+    // Detection runs once; the force flags from the document are applied on top of the GPU result when the row is rendered.
+    let monitors = crate::wrappers::detect_monitors();
+    let mut probe = crate::config::App::default();
+    crate::wrappers::determine_wayland_by_gpu(&mut probe);
+
+    let mut editor = Editor::new(path, doc, monitors, probe.wayland_enabled);
     editor.jump_to_first();
     if let Some(warning) = warning {
         editor.status = warning;
@@ -1009,7 +1119,7 @@ mod tests {
         let defaults = config_file::default_document();
         complete_document(&mut doc, &defaults);
 
-        let mut editor = Editor::new(path.clone(), doc);
+        let mut editor = Editor::new(path.clone(), doc, Vec::new(), false);
         // Select MangoHud, a boolean, and toggle it.
         editor.select_key("mangohud");
         editor.activate();
@@ -1032,7 +1142,7 @@ mod tests {
         let path = dir.join("config.toml");
 
         let doc = config_file::default_document();
-        let mut editor = Editor::new(path, doc);
+        let mut editor = Editor::new(path, doc, Vec::new(), false);
         editor.mode = Mode::EditText(TextEdit {
             key: "logging_level".to_string(),
             entry: None,
@@ -1052,7 +1162,7 @@ mod tests {
     fn choice_setting_cycles_only_through_allowed_values() {
         let dir = std::env::temp_dir().join(format!("game_tui_choice_{}", std::process::id()));
         let doc = config_file::default_document();
-        let mut editor = Editor::new(dir.join("config.toml"), doc);
+        let mut editor = Editor::new(dir.join("config.toml"), doc, Vec::new(), false);
         editor.select_key("logging_level");
 
         assert_eq!(editor.get_integer("logging_level"), 0);
@@ -1068,7 +1178,7 @@ mod tests {
     fn instances_is_edited_as_a_number_and_rejects_negatives() {
         let dir = std::env::temp_dir().join(format!("game_tui_inst_{}", std::process::id()));
         let doc = config_file::default_document();
-        let mut editor = Editor::new(dir.join("config.toml"), doc);
+        let mut editor = Editor::new(dir.join("config.toml"), doc, Vec::new(), false);
         editor.select_key("instances");
 
         // Space on a non-choice integer opens the text editor.
@@ -1085,6 +1195,92 @@ mod tests {
 
         assert_eq!(editor.get_integer("instances"), 1, "kept the old value");
         assert!(editor.status.contains("negative"));
+        assert!(!editor.dirty);
+    }
+
+    #[test]
+    fn wayland_monitor_row_is_only_shown_with_wayland() {
+        let dir = std::env::temp_dir().join(format!("game_tui_wl_{}", std::process::id()));
+        let doc = config_file::default_document();
+        let mut editor = Editor::new(
+            dir.join("config.toml"),
+            doc,
+            vec!["DP-1".to_string()],
+            false,
+        );
+        assert!(!editor.visible_keys().contains(&"wayland_monitor"));
+
+        // Forcing Wayland shows it, and forcing it off hides it again, even
+        // when the GPU would enable Wayland. Force-enable wins over
+        // force-disable, so it is cleared first.
+        editor.set_value("wayland_force_enable", Value::from(true));
+        assert!(editor.visible_keys().contains(&"wayland_monitor"));
+        editor.set_value("wayland_force_enable", Value::from(false));
+
+        editor.gpu_wayland = true;
+        editor.set_value("wayland_force_disable", Value::from(true));
+        assert!(!editor.visible_keys().contains(&"wayland_monitor"));
+
+        // Otherwise the GPU detection decides.
+        editor.set_value("wayland_force_enable", Value::from(false));
+        editor.set_value("wayland_force_disable", Value::from(false));
+        editor.gpu_wayland = false;
+        assert!(!editor.visible_keys().contains(&"wayland_monitor"));
+        editor.gpu_wayland = true;
+        assert!(editor.visible_keys().contains(&"wayland_monitor"));
+    }
+
+    #[test]
+    fn wayland_monitor_cycles_detected_outputs_only() {
+        let dir = std::env::temp_dir().join(format!("game_tui_wlm_{}", std::process::id()));
+        let doc = config_file::default_document();
+        let monitors = vec!["DP-1".to_string(), "DP-2".to_string()];
+        let mut editor = Editor::new(dir.join("config.toml"), doc, monitors, true);
+        editor.select_key("wayland_monitor");
+
+        assert_eq!(editor.get_text("wayland_monitor"), "");
+        editor.activate();
+        assert_eq!(editor.get_text("wayland_monitor"), "DP-1");
+        assert!(matches!(editor.mode, Mode::Form), "no free text entry");
+
+        editor.activate();
+        assert_eq!(editor.get_text("wayland_monitor"), "DP-2");
+        editor.activate();
+        assert_eq!(
+            editor.get_text("wayland_monitor"),
+            "",
+            "wraps back to unset"
+        );
+
+        editor.cycle_choice(-1);
+        assert_eq!(
+            editor.get_text("wayland_monitor"),
+            "DP-2",
+            "left arrow steps back"
+        );
+    }
+
+    #[test]
+    fn wayland_monitor_keeps_a_configured_but_undetected_value() {
+        let dir = std::env::temp_dir().join(format!("game_tui_wlk_{}", std::process::id()));
+        let doc = config_file::default_document();
+        let mut editor = Editor::new(dir.join("config.toml"), doc, vec!["DP-1".to_string()], true);
+        editor.set_value("wayland_monitor", Value::from("HDMI-A-1"));
+
+        let choices = editor.monitor_choices();
+        assert!(choices.contains(&"HDMI-A-1".to_string()));
+    }
+
+    #[test]
+    fn wayland_monitor_reports_when_nothing_is_detected() {
+        let dir = std::env::temp_dir().join(format!("game_tui_wln_{}", std::process::id()));
+        let doc = config_file::default_document();
+        let mut editor = Editor::new(dir.join("config.toml"), doc, Vec::new(), true);
+        editor.select_key("wayland_monitor");
+        editor.activate();
+
+        assert_eq!(editor.get_text("wayland_monitor"), "");
+        assert!(editor.status.contains("No Wayland monitors"));
         assert!(!editor.dirty);
     }
 }

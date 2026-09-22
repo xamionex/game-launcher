@@ -18,7 +18,8 @@ The Cargo package is named `game-launcher`; the built binary is named `game` (se
 NVIDIA NOTE: If you're using nvidia, this launcher makes your games launch in wayland because performance is usually better in wayland. \
 But there are issues with this like: tray icons not going into tray and some apps (launchers) being a white screen. \
 To fix this, use this proton-cachyos fork that fixes wayland issues: https://github.com/nanomatters/proton-cachyos/releases/ \
-If you're having an issue with your games opening on a different monitor use: WAYLANDDRV_PRIMARY_MONITOR=DP-1 (change the id to your primary monitor)
+If you're having an issue with your games opening on a different monitor: set the primary monitor with `-M DP-1` (or `wayland_monitor` in the config, `-C` lists the detected monitors). \
+This sets `WAYLANDDRV_PRIMARY_MONITOR` and only applies while Wayland is enabled.
 
 ## Automatic Install
 
@@ -157,6 +158,7 @@ Valued flags:
 | `-u MOD` | Add a background mod command (repeatable) |
 | `-r EXE` | Replace the launched executable |
 | `-d DLLS` | Add DLL overrides, semicolon separated (`dinput8=n,b;dxgi=n,b`) |
+| `-M MONITOR` | Set the primary monitor for the Wine Wayland driver (`WAYLANDDRV_PRIMARY_MONITOR`, e.g. `DP-1`); only applied when Wayland is enabled |
 | `-i N` | Number of instances (accepted; currently inert) |
 
 Short flags may be bundled (`-ghk`) and valued flags accept attached or
@@ -200,6 +202,10 @@ Saving rewrites the file through `toml_edit`, so comments and formatting are kep
 
 A config file that cannot be parsed is ignored as a whole, with the reason printed to stderr and written to the launch log; the built-in defaults are used instead. \
 `-C` needs a terminal, so run it from a shell rather than from Steam launch options.
+
+The `wayland_monitor` setting (`-M`) picks the monitor games open on when the Wine Wayland driver is in use. \
+The editor only shows the row when Wayland is enabled (GPU detection, or `wayland_force_enable`/`wayland_force_disable`), and only lets you pick from the outputs it detects through `wayland-info`, `wlr-randr`, `hyprctl`, `swaymsg`, `kscreen-doctor` or the DRM connectors. \
+The launcher exports it as `WAYLANDDRV_PRIMARY_MONITOR` and, when Wayland is off, ignores it with a log line.
 
 ## Payloads
 

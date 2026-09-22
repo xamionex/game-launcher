@@ -92,6 +92,9 @@ pub struct App {
     pub logging_level: i32,
     pub instances: u32,
     pub replacement_exe: String,
+    /// Wayland output used as the primary monitor by the Wine Wayland driver (`WAYLANDDRV_PRIMARY_MONITOR`), for example `DP-1`.
+    /// Only applied when Wayland is enabled.
+    pub wayland_monitor: String,
     pub winedlloverrides_list: Vec<String>,
     pub mods_to_launch: Vec<String>,
     pub custom_exports: Vec<CustomExport>,
@@ -145,6 +148,7 @@ impl Default for App {
             logging_level: 0,
             instances: 1,
             replacement_exe: String::new(),
+            wayland_monitor: String::new(),
             winedlloverrides_list: Vec::new(),
             mods_to_launch: Vec::new(),
             custom_exports: Vec::new(),

@@ -110,6 +110,10 @@ instances = 1
 # Replace the launched executable. -r.
 replacement_exe = ""
 
+# Primary monitor for the Wine Wayland driver, e.g. "DP-1".
+# This sets WAYLANDDRV_PRIMARY_MONITOR and is only applied when Wayland is enabled (see wayland_force_enable above). -M sets it, or pick one from the detected monitors with -C.
+wayland_monitor = ""
+
 # --- Lists (command-line flags append to these) ---
 
 # Extra DLL overrides, one entry per override, e.g. ["dinput8=n,b", "dxgi=n,b"]. -d.
@@ -153,6 +157,7 @@ pub struct FileConfig {
     pub logging_level: Option<i32>,
     pub instances: Option<u32>,
     pub replacement_exe: Option<String>,
+    pub wayland_monitor: Option<String>,
 
     pub dll_overrides: Option<Vec<String>>,
     pub mods: Option<Vec<String>>,
@@ -203,6 +208,9 @@ fn apply(cfg: &FileConfig, app: &mut App) -> Vec<String> {
     }
     if let Some(v) = &cfg.replacement_exe {
         app.replacement_exe = v.clone();
+    }
+    if let Some(v) = &cfg.wayland_monitor {
+        app.wayland_monitor = v.clone();
     }
     if let Some(list) = &cfg.dll_overrides {
         app.winedlloverrides_list = list.clone();

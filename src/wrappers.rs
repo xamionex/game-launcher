@@ -4,6 +4,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use regex::Regex;
+
 use crate::config::{App, EMPTY_MARKER};
 use crate::payload;
 
@@ -112,6 +114,151 @@ fn gamemode_conflict() -> Option<&'static str> {
     None
 }
 
+/// Run `program` with `args`, returning its stdout when it succeeds.
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// wl_output names from `wayland-info`, one block per monitor:
+///
+/// ```text
+/// interface: 'wl_output', version: 4, name: 65
+///     name: DP-1
+/// ```
+fn monitors_from_wayland_info(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_output = false;
+    for line in text.lines() {
+        if line.starts_with("interface:") {
+            in_output = line.contains("'wl_output'");
+            continue;
+        }
+        if !in_output {
+            continue;
+        }
+        if let Some(name) = line.trim_start().strip_prefix("name:") {
+            let name = name.trim().trim_matches('\'').trim();
+            if !name.is_empty() && !out.contains(&name.to_string()) {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Monitor names from the JSON listings of `wlr-randr --json`, `hyprctl monitors -j` and `swaymsg -t get_outputs`, which are all arrays of objects carrying a `name`.
+fn monitors_from_json(text: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("name").and_then(|n| n.as_str()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Connected output names from `kscreen-doctor -o`.
+///
+/// Each block starts with `Output: <id> <name> <uuid>` and reports `connected` or `disconnected` on a following line; the output is colored with ANSI escapes, which are stripped before parsing.
+fn monitors_from_kscreen(text: &str) -> Vec<String> {
+    let ansi = Regex::new("\u{1b}\\[[0-9;]*m").unwrap();
+    let clean = ansi.replace_all(text, "");
+    let lines: Vec<&str> = clean.lines().collect();
+
+    let mut out = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let Some(rest) = line.trim().strip_prefix("Output:") else {
+            continue;
+        };
+        let Some(name) = rest.split_whitespace().nth(1) else {
+            continue;
+        };
+        let connected = lines[index + 1..]
+            .iter()
+            .take(3)
+            .any(|l| l.trim() == "connected");
+        if connected && !out.contains(&name.to_string()) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// Connected connector names from `/sys/class/drm`, e.g. `card1-DP-1` -> `DP-1`.
+fn monitors_from_drm() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/sys/class/drm") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let status = std::fs::read_to_string(entry.path().join("status")).unwrap_or_default();
+        if status.trim() != "connected" {
+            continue;
+        }
+        let Some((_, connector)) = name.split_once('-') else {
+            continue;
+        };
+        if connector.is_empty() || out.contains(&connector.to_string()) {
+            continue;
+        }
+        out.push(connector.to_string());
+    }
+    out.sort();
+    out
+}
+
+/// Wayland output names known to the session.
+///
+/// Compositor tools are tried in order and the DRM connectors are used as a last resort, so there is normally something to pick from.
+pub fn detect_monitors() -> Vec<String> {
+    /// A detection source: program, arguments, and stdout parser.
+    type Source = (
+        &'static str,
+        &'static [&'static str],
+        fn(&str) -> Vec<String>,
+    );
+
+    let attempts: &[Source] = &[
+        ("wayland-info", &[], monitors_from_wayland_info),
+        ("wlr-randr", &["--json"], monitors_from_json),
+        ("hyprctl", &["monitors", "-j"], monitors_from_json),
+        ("swaymsg", &["-t", "get_outputs"], monitors_from_json),
+        ("kscreen-doctor", &["-o"], monitors_from_kscreen),
+    ];
+    for (program, args, parse) in attempts {
+        if let Some(stdout) = command_stdout(program, args) {
+            let names = parse(&stdout);
+            if !names.is_empty() {
+                return names;
+            }
+        }
+    }
+    monitors_from_drm()
+}
+
+/// The Wayland monitor to export, if Wayland is on and one is configured.
+fn wayland_monitor_env(app: &App) -> Option<&str> {
+    if app.wayland_enabled && !app.wayland_monitor.is_empty() {
+        Some(&app.wayland_monitor)
+    } else {
+        None
+    }
+}
+
 /// Prepend `prefix` tokens to `cmd`, returning a new vector.
 fn prepend(prefix: &[&str], cmd: &[String]) -> Vec<String> {
     let mut out: Vec<String> = prefix.iter().map(|s| s.to_string()).collect();
@@ -212,6 +359,16 @@ pub fn apply_wrappers(app: &mut App) {
         std::env::set_var("PROTON_USE_WAYLAND", "1");
         std::env::set_var("QT_QPA_PLATFORM", "wayland");
         std::env::set_var("SDL_VIDEODRIVER", "wayland");
+
+        if let Some(monitor) = wayland_monitor_env(app) {
+            std::env::set_var("WAYLANDDRV_PRIMARY_MONITOR", monitor);
+            app.log(&format!("Wayland primary monitor: {monitor}"));
+        }
+    } else if !app.wayland_monitor.is_empty() {
+        app.log(&format!(
+            "Wayland primary monitor {} ignored: Wayland is disabled, force it with -W",
+            app.wayland_monitor
+        ));
     }
 
     let info = gpu_info();
@@ -531,6 +688,58 @@ mod tests {
     fn kernel_release_is_readable() {
         // Guards the file used for the BORE fallback check.
         assert!(!kernel_release().is_empty());
+    }
+
+    #[test]
+    fn wayland_info_monitors_are_parsed() {
+        let text = "\
+interface: 'wl_drm',                              version:  2, name: 12
+interface: 'wl_output',                           version:  4, name: 65
+\tname: DP-1
+\tdescription: Promotion and Display Technology Ltd. 27GM620BF DP-1
+\tmode:
+\t\twidth: 1920 px, height: 1080 px, refresh: 165.001 Hz,
+interface: 'kde_output_order_v1',                 version:  1, name: 68
+interface: 'wl_output',                           version:  4, name: 66
+\tname: DP-2
+";
+        assert_eq!(monitors_from_wayland_info(text), vec!["DP-1", "DP-2"]);
+    }
+
+    #[test]
+    fn json_monitors_are_parsed() {
+        let hyprctl = r#"[{"id":0,"name":"DP-1","description":"Dell","monitor":"DP-1"}]"#;
+        assert_eq!(monitors_from_json(hyprctl), vec!["DP-1"]);
+
+        let wlr_randr = r#"[{"name":"eDP-1","enabled":true},{"name":"HDMI-A-1","enabled":false}]"#;
+        assert_eq!(monitors_from_json(wlr_randr), vec!["eDP-1", "HDMI-A-1"]);
+
+        assert!(monitors_from_json("not json").is_empty());
+    }
+
+    #[test]
+    fn kscreen_monitors_are_parsed_and_colors_stripped() {
+        let text = "\
+\u{1b}[01;32mOutput: \u{1b}[0;0m1 DP-2 20ea350b-uuid
+\t\u{1b}[01;32menabled\u{1b}[0;0m
+\t\u{1b}[01;32mconnected\u{1b}[0;0m
+\u{1b}[01;32mOutput: \u{1b}[0;0m2 DP-1 4f508cbc-uuid
+\t\u{1b}[01;32menabled\u{1b}[0;0m
+\t\u{1b}[01;33mdisconnected\u{1b}[0;0m
+";
+        assert_eq!(monitors_from_kscreen(text), vec!["DP-2"]);
+    }
+
+    #[test]
+    fn wayland_monitor_is_only_exported_with_wayland() {
+        let mut app = App::default();
+        assert_eq!(wayland_monitor_env(&app), None);
+
+        app.wayland_monitor = "DP-1".to_string();
+        assert_eq!(wayland_monitor_env(&app), None, "Wayland is off");
+
+        app.wayland_enabled = true;
+        assert_eq!(wayland_monitor_env(&app), Some("DP-1"));
     }
 
     #[test]

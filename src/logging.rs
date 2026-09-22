@@ -252,7 +252,7 @@ pub fn log_separator(path: &Path, symbol: char, text: &str) {
 /// Filtered environment dump prefixes (mirrors the original grep alternation).
 fn env_filter_match(key: &str) -> bool {
     const PREFIXES: &[&str] = &[
-        "STEAM", "PROTON", "WINE", "DXVK", "VK_", "LD_", "MANGOHUD", "GAMEMODE", "GAME",
+        "STEAM", "PROTON", "WINE", "DXVK", "VK_", "LD_", "MANGOHUD", "GAMEMODE", "GAME", "WAYLAND",
     ];
     PREFIXES.iter().any(|p| key.starts_with(p))
 }
