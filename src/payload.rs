@@ -65,7 +65,11 @@ fn download(app: &App, url: &str, dest: &Path) -> bool {
         return false;
     };
     if let Err(e) = std::fs::create_dir_all(dir) {
-        app.log(&format!("Payload: failed to create {}: {e}", dir.display()));
+        app.log(&format!(
+            "Payload: failed to create {}: {e}{}",
+            dir.display(),
+            config_file::permission_hint(&e, dir)
+        ));
         return false;
     }
 

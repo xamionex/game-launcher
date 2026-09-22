@@ -261,6 +261,18 @@ fn unknown_keys(doc: &DocumentMut) -> Vec<String> {
         .collect()
 }
 
+/// A hint appended to permission errors.
+///
+/// A config directory created by a root install (or an earlier `sudo` run) belongs to root, and the launcher runs as the user, so writing there fails with `Permission denied (os error 13)`.
+pub fn permission_hint(error: &std::io::Error, path: &Path) -> String {
+    if error.kind() != std::io::ErrorKind::PermissionDenied {
+        return String::new();
+    }
+    let dir = path.parent().unwrap_or(path);
+    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
+    format!(" (check ownership: sudo chown -R {user} {})", dir.display())
+}
+
 /// [`load`] for an explicit path, used by tests.
 fn load_from(app: &mut App, path: &Path) -> Vec<String> {
     if !path.is_file() {
@@ -270,7 +282,11 @@ fn load_from(app: &mut App, path: &Path) -> Vec<String> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) => {
-            let note = format!("Config: failed to read {}: {e}", path.display());
+            let note = format!(
+                "Config: failed to read {}: {e}{}",
+                path.display(),
+                permission_hint(&e, path)
+            );
             eprintln!("game: {note}");
             return vec![note];
         }
@@ -307,7 +323,11 @@ fn load_from(app: &mut App, path: &Path) -> Vec<String> {
 fn create_default(path: &Path) -> Vec<String> {
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            let note = format!("Config: failed to create {}: {e}", parent.display());
+            let note = format!(
+                "Config: failed to create {}: {e}{}",
+                parent.display(),
+                permission_hint(&e, parent)
+            );
             eprintln!("game: {note}");
             return vec![note];
         }
@@ -318,7 +338,11 @@ fn create_default(path: &Path) -> Vec<String> {
             path.display()
         )],
         Err(e) => {
-            let note = format!("Config: failed to write {}: {e}", path.display());
+            let note = format!(
+                "Config: failed to write {}: {e}{}",
+                path.display(),
+                permission_hint(&e, path)
+            );
             eprintln!("game: {note}");
             vec![note]
         }
@@ -365,11 +389,21 @@ pub fn load_document(path: &Path) -> (DocumentMut, Option<String>) {
 /// Write an edited document back to `path`, creating parent directories.
 pub fn save_document(doc: &DocumentMut, path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create {}: {e}{}",
+                parent.display(),
+                permission_hint(&e, parent)
+            )
+        })?;
     }
-    std::fs::write(path, doc.to_string())
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))
+    std::fs::write(path, doc.to_string()).map_err(|e| {
+        format!(
+            "failed to write {}: {e}{}",
+            path.display(),
+            permission_hint(&e, path)
+        )
+    })
 }
 
 #[cfg(test)]
@@ -401,6 +435,17 @@ mod tests {
         assert!(!app.mangohud);
         assert!(app.gamemode);
         assert!(app.protonhax, "unlisted fields keep their defaults");
+    }
+
+    #[test]
+    fn permission_errors_get_a_chown_hint() {
+        let err = std::io::Error::from_raw_os_error(13);
+        let hint = permission_hint(&err, Path::new("/home/u/.config/game-launcher/config.toml"));
+        assert!(hint.contains("chown"), "{hint}");
+        assert!(hint.contains("/home/u/.config/game-launcher"), "{hint}");
+
+        let missing = std::io::Error::from_raw_os_error(2);
+        assert!(permission_hint(&missing, Path::new("/tmp/x")).is_empty());
     }
 
     #[test]

@@ -43,6 +43,25 @@ fi
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 [ -n "$TARGET_HOME" ] || die "could not resolve home directory for user $TARGET_USER"
 
+# Root mode runs this script as root, so directories it creates under the
+# user's home would belong to root and the launcher, which runs as the user,
+# would fail with "Permission denied (os error 13)". Hand root-owned
+# directories on the path back to the target user, never leaving the home tree.
+fix_owner() {
+    path="$1"
+    case "$path" in
+        "$TARGET_HOME"/*) ;;
+        *) return ;;
+    esac
+    while [ -n "$path" ] && [ "$path" != "/" ] && [ "$path" != "$TARGET_HOME" ]; do
+        owner="$(stat -c '%U' "$path" 2>/dev/null || true)"
+        if [ "$owner" = "root" ]; then
+            chown "$TARGET_USER" "$path" 2>/dev/null || true
+        fi
+        path="$(dirname "$path")"
+    done
+}
+
 MODE="root"
 if [ "${1:-}" = "--user" ]; then
     MODE="user"
@@ -121,6 +140,9 @@ install -m 755 "$TMP_DIR/$BIN_NAME" "$BIN_DIR/$BIN_NAME"
 
 info "installing dxvk config to $DXVK_DIR/dxvk.conf"
 mkdir -p "$DXVK_DIR"
+# Only chown the directory itself: dxvk may be a symlink into a repo, which
+# chown -R would follow into unrelated files.
+fix_owner "$DXVK_DIR"
 curl -fsSL -o "$DXVK_DIR/dxvk.conf" "$RAW_URL/dxvk/dxvk.conf" \
     || die "failed to download dxvk.conf"
 chown "$TARGET_USER" "$DXVK_DIR/dxvk.conf" 2>/dev/null || true
@@ -142,6 +164,9 @@ fetch_payload() {
 }
 
 if mkdir -p "$PAYLOAD_DIR"; then
+    fix_owner "$PAYLOAD_DIR"
+    # Also fix files inside (payloads and config written by an older installer).
+    chown -R "$TARGET_USER" "$(dirname "$PAYLOAD_DIR")" 2>/dev/null || true
     fetch_payload "https://github.com/yesyes0649/eos-proxy/releases/latest/download/EOSSDK-Win64-Shipping.dll" \
         "EOSSDK-Win64-Shipping.dll"
     fetch_payload "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so" \
