@@ -130,8 +130,9 @@ exports = []
 /// A parsed config file.
 ///
 /// Every field is optional: `None` means the line was absent and the built-in default is kept, so users can delete lines they do not care about.
+/// Keys the launcher does not know are ignored rather than rejected, because a config written by a newer version (or one with a typo) must never take the whole file down.
 #[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct FileConfig {
     pub mangohud: Option<bool>,
     pub mangohud_force: Option<bool>,
@@ -248,6 +249,18 @@ pub fn load(app: &mut App) -> Vec<String> {
     }
 }
 
+/// Top-level keys that the launcher does not know about.
+///
+/// Compared against [`DEFAULT_CONFIG`], which is kept in sync with the parser, so a typo (or a key from a newer version) can be reported without failing the launch.
+fn unknown_keys(doc: &DocumentMut) -> Vec<String> {
+    let defaults = default_document();
+    let known: Vec<&str> = defaults.iter().map(|(key, _)| key).collect();
+    doc.iter()
+        .filter(|(key, _)| !known.contains(key))
+        .map(|(key, _)| key.to_string())
+        .collect()
+}
+
 /// [`load`] for an explicit path, used by tests.
 fn load_from(app: &mut App, path: &Path) -> Vec<String> {
     if !path.is_file() {
@@ -267,6 +280,16 @@ fn load_from(app: &mut App, path: &Path) -> Vec<String> {
         Ok(cfg) => {
             let mut notes = apply(&cfg, app);
             notes.insert(0, format!("Config: loaded {}", path.display()));
+            if let Ok(doc) = text.parse::<DocumentMut>() {
+                let unknown = unknown_keys(&doc);
+                if !unknown.is_empty() {
+                    notes.push(format!(
+                        "Config: ignoring unknown keys in {}: {} (typo, or written by a newer version)",
+                        path.display(),
+                        unknown.join(", ")
+                    ));
+                }
+            }
             notes
         }
         Err(e) => {
@@ -311,14 +334,24 @@ pub fn default_document() -> DocumentMut {
 
 /// Read the config file for editing, falling back to the defaults.
 ///
-/// Returns the document and an optional warning to show in the editor when the
-/// existing file could not be parsed.
+/// Returns the document and an optional warning to show in the editor, either because the existing file could not be parsed or because it contains keys this version does not know (which are kept as they are).
 pub fn load_document(path: &Path) -> (DocumentMut, Option<String>) {
     let Ok(text) = std::fs::read_to_string(path) else {
         return (default_document(), None);
     };
     match text.parse::<DocumentMut>() {
-        Ok(doc) => (doc, None),
+        Ok(doc) => {
+            let unknown = unknown_keys(&doc);
+            let warning = if unknown.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "Ignoring unknown keys: {} (typo, or written by a newer version)",
+                    unknown.join(", ")
+                ))
+            };
+            (doc, warning)
+        }
         Err(e) => (
             default_document(),
             Some(format!(
@@ -371,8 +404,39 @@ mod tests {
     }
 
     #[test]
-    fn unknown_key_is_rejected() {
-        assert!(toml::from_str::<FileConfig>("mangohud_x = true").is_err());
+    fn unknown_keys_are_ignored_and_reported() {
+        let dir = scratch("unknown");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "mangohud = false\nnewer_setting = 1\n").unwrap();
+
+        let mut app = App::default();
+        let notes = load_from(&mut app, &path);
+
+        assert!(!app.mangohud, "known keys still apply");
+        assert!(
+            notes.iter().any(|n| n.contains("newer_setting")),
+            "unknown key is reported: {notes:?}"
+        );
+        assert!(notes[0].contains("loaded"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_config_without_newer_keys_still_parses() {
+        let dir = scratch("older");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "mangohud = false\ngamemode = true\n").unwrap();
+
+        let mut app = App::default();
+        let notes = load_from(&mut app, &path);
+
+        assert!(!app.mangohud);
+        assert!(app.gamemode);
+        assert_eq!(app.wayland_monitor, "");
+        assert!(!notes.iter().any(|n| n.contains("unknown")));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

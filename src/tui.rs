@@ -1032,10 +1032,16 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 /// Fill in keys that are missing from `doc` using the defaults, so the editor always shows (and saves) the full set of settings.
 fn complete_document(doc: &mut DocumentMut, defaults: &DocumentMut) {
     for field in FIELDS {
-        if doc.get(field.key).is_none() {
-            if let Some(item) = defaults.get(field.key) {
-                doc[field.key] = item.clone();
-            }
+        if doc.get(field.key).is_some() {
+            continue;
+        }
+        let Some((source_key, source_item)) = defaults.as_table().get_key_value(field.key) else {
+            continue;
+        };
+        let decor = source_key.leaf_decor().clone();
+        doc.as_table_mut().insert(field.key, source_item.clone());
+        if let Some(mut key) = doc.as_table_mut().key_mut(field.key) {
+            *key.leaf_decor_mut() = decor;
         }
     }
 }
@@ -1104,7 +1110,17 @@ mod tests {
             Some(false),
             "existing values win"
         );
-        assert_eq!(doc["protonhax"].as_bool(), Some(true));
+        assert_eq!(doc["gamemode"].as_bool(), Some(true));
+
+        let rendered = doc.to_string();
+        assert!(
+            rendered.contains("# GameMode. -g disables it."),
+            "template comments are carried over: {rendered}"
+        );
+        assert!(
+            rendered.contains("# Primary monitor for the Wine Wayland driver"),
+            "comments for keys appended at the end are carried over too"
+        );
     }
 
     #[test]

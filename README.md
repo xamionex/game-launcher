@@ -201,6 +201,7 @@ Saving rewrites the file through `toml_edit`, so comments and formatting are kep
 `-C` is an action: it ignores any game command given alongside it.
 
 A config file that cannot be parsed is ignored as a whole, with the reason printed to stderr and written to the launch log; the built-in defaults are used instead. \
+Keys the launcher does not know are ignored (and reported in the log), so a config written by a newer version or a typo never takes the whole file down. \
 `-C` needs a terminal, so run it from a shell rather than from Steam launch options.
 
 The `wayland_monitor` setting (`-M`) picks the monitor games open on when the Wine Wayland driver is in use. \
