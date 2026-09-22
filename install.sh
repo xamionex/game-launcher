@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Installer for game-launcher.
 #
-# Downloads the latest release binary from GitHub and installs it, plus the
-# bundled dxvk config.
+# Downloads the latest release binary from GitHub and installs it, plus the bundled dxvk config.
+# Also refreshes the payload cache (EOS-Proxy dll and netsock fix.so) so a reinstall picks up the latest upstream releases.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh
@@ -17,8 +17,8 @@
 #   - binary goes to ~/.local/bin/game
 #   - gaming mode may not find it, see the README
 #
-# The dxvk config always goes to the invoking user's ~/.config/dxvk/dxvk.conf,
-# even for root installs.
+# The dxvk config always goes to the invoking user's ~/.config/dxvk/dxvk.conf, even for root installs.
+# Payloads go to the invoking user's config directory (honoring XDG_CONFIG_HOME), and a failed payload fetch is only a warning: the binary embeds fallback copies.
 set -eu
 
 REPO="xamionex/game-launcher"
@@ -31,8 +31,7 @@ info()  { printf '%s\n' "==> $*"; }
 warn()  { printf '%s\n' "!! $*" >&2; }
 die()   { printf '%s\n' "!! $*" >&2; exit 1; }
 
-# The user the install is for. For root installs this is the invoking user,
-# not root, so dxvk and the sudo re-run target the right home directory.
+# The user the install is for. For root installs this is the invoking user, not root, so dxvk and the sudo re-run target the right home directory.
 if [ "$(id -u)" -eq 0 ]; then
     TARGET_USER="${SUDO_USER:-}"
     [ -n "$TARGET_USER" ] || die "running as root without SUDO_USER; run as a normal user instead"
@@ -40,8 +39,7 @@ else
     TARGET_USER="$(id -un)"
 fi
 
-# Resolve the target user's home directory without relying on $HOME, which
-# sudo may or may not preserve.
+# Resolve the target user's home directory without relying on $HOME, which sudo may or may not preserve.
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 [ -n "$TARGET_HOME" ] || die "could not resolve home directory for user $TARGET_USER"
 
@@ -55,29 +53,30 @@ elif [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     cat <<EOF
 Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh [-- --user]
 
-Installs the game-launcher binary and dxvk config.
+Installs the game-launcher binary, the dxvk config and refreshes the payload cache (EOS-Proxy dll and netsock fix.so).
 
 Root install (default, preferred):
-  binary at /usr/local/bin/$BIN_NAME, works in Steam Deck gaming mode
-  without specifying the full path. Prompts for sudo when needed.
+  binary at /usr/local/bin/$BIN_NAME, works in Steam Deck gaming mode without specifying the full path.
+  Prompts for sudo when needed.
 
 User install (--user):
   binary at ~/.local/bin/$BIN_NAME.
 
 The dxvk config always goes to ~/.config/dxvk/dxvk.conf for the invoking user.
+Payloads go to the invoking user's config directory.
 EOF
     exit 0
 elif [ -n "${1:-}" ]; then
     die "unknown argument: $1 (use --user for a user install, --help for usage)"
 fi
 
-# Root installs re-run themselves with sudo so the binary can be written to
-# /usr/local/bin. The script is re-downloaded inside the sudo shell because
-# $0 is not a usable path when the script is piped from curl.
+# Root installs re-run themselves with sudo so the binary can be written to /usr/local/bin.
+# The script is re-downloaded inside the sudo shell because $0 is not a usable path when the script is piped from curl.
 if [ "$MODE" = "root" ] && [ "$(id -u)" -ne 0 ]; then
     if command -v sudo >/dev/null 2>&1; then
         info "root install requested, re-running with sudo"
         exec sudo TARGET_USER="$TARGET_USER" TARGET_HOME="$TARGET_HOME" \
+            XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" \
             GAME_LAUNCHER_API="$API" GAME_LAUNCHER_RAW="$RAW_URL" \
             bash -c "curl -fsSL '$RAW_URL/install.sh' | bash -s -- --root"
     fi
@@ -90,6 +89,9 @@ else
     BIN_DIR="$TARGET_HOME/.local/bin"
 fi
 DXVK_DIR="$TARGET_HOME/.config/dxvk"
+# The launcher resolves its config directory through XDG_CONFIG_HOME, so the payload cache has to follow the same rule.
+CONFIG_HOME="${XDG_CONFIG_HOME:-$TARGET_HOME/.config}"
+PAYLOAD_DIR="$CONFIG_HOME/game-launcher/payloads"
 
 command -v curl >/dev/null 2>&1 || die "curl is required but not installed"
 command -v mktemp >/dev/null 2>&1 || die "mktemp is required but not installed"
@@ -122,6 +124,31 @@ mkdir -p "$DXVK_DIR"
 curl -fsSL -o "$DXVK_DIR/dxvk.conf" "$RAW_URL/dxvk/dxvk.conf" \
     || die "failed to download dxvk.conf"
 chown "$TARGET_USER" "$DXVK_DIR/dxvk.conf" 2>/dev/null || true
+
+# Refresh the payload cache. Best effort: the binary embeds fallback copies, so a failed fetch is a warning rather than a fatal error.
+info "refreshing payloads in $PAYLOAD_DIR"
+
+fetch_payload() {
+    url="$1"
+    name="$2"
+    if curl -fsSL --connect-timeout 10 --max-time 300 -o "$PAYLOAD_DIR/$name.part" "$url" \
+        && mv "$PAYLOAD_DIR/$name.part" "$PAYLOAD_DIR/$name"; then
+        chown "$TARGET_USER" "$PAYLOAD_DIR/$name" 2>/dev/null || true
+        info "payload $name updated"
+    else
+        rm -f "$PAYLOAD_DIR/$name.part"
+        warn "could not fetch $name, the launcher will use its bundled copy"
+    fi
+}
+
+if mkdir -p "$PAYLOAD_DIR"; then
+    fetch_payload "https://github.com/yesyes0649/eos-proxy/releases/latest/download/EOSSDK-Win64-Shipping.dll" \
+        "EOSSDK-Win64-Shipping.dll"
+    fetch_payload "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so" \
+        "netsock.so"
+else
+    warn "could not create $PAYLOAD_DIR, skipping payload refresh"
+fi
 
 info "done"
 if [ "$MODE" = "root" ]; then

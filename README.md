@@ -8,19 +8,24 @@ Sets a curated set of Proton/DXVK/VKD3D environment variables (src/wrappers.rs),
 Detects the GPU vendor and sets Wayland (amd off, nvidia on), \
 and writes structured per game logs to `~/logs/game`.
 
-Optionally: stages the game into a RAM disk, launches background mods.
+Optionally: launches background mods.
+
+Defaults for the tools come from `~/.config/game-launcher/config.toml`, \
+written on first run; command line flags override it. See [Configuration](#configuration).
 
 The Cargo package is named `game-launcher`; the built binary is named `game` (see `[[bin]]` in `Cargo.toml`).
 
-NVIDIA NOTE: If you're using nvidia, this launcher makes your games launch in wayland because performance is usually better in wayland.
-But there are issues with this like: tray icons not going into tray and some apps (launchers) being a white screen.
-To fix this, use this proton-cachyos fork that fixes wayland issues: https://github.com/nanomatters/proton-cachyos/releases/
+NVIDIA NOTE: If you're using nvidia, this launcher makes your games launch in wayland because performance is usually better in wayland. \
+But there are issues with this like: tray icons not going into tray and some apps (launchers) being a white screen. \
+To fix this, use this proton-cachyos fork that fixes wayland issues: https://github.com/nanomatters/proton-cachyos/releases/ \
 If you're having an issue with your games opening on a different monitor use: WAYLANDDRV_PRIMARY_MONITOR=DP-1 (change the id to your primary monitor)
 
 ## Automatic Install
 
-The preferred way to install is the curl installer. It downloads the latest
-release binary and installs the dxvk config to `~/.config/dxvk/dxvk.conf`.
+The preferred way to install is the curl installer. \
+It downloads the latest release binary, \
+installs the dxvk config to `~/.config/dxvk/dxvk.conf` \
+and refreshes the payload cache in `~/.config/game-launcher/payloads`.
 
 Root install (preferred):
 
@@ -28,9 +33,9 @@ Root install (preferred):
 curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh
 ```
 
-Installs `game` to `/usr/local/bin/game`. This is the recommended way to install, \
-because Steam Deck gaming mode (the gamescope session) does not source your shell profiles, \
-so `~/.local/bin` may not be on `PATH` and Steam will fail to find the `game` binary. \
+Installs `game` to `/usr/local/bin/game`. \
+This is the recommended way to install, because Steam Deck gaming mode (the gamescope session) does not source your shell profiles, \
+so `~/.local/bin` won't be in `PATH` and Steam will fail to find the `game` binary. \
 With the root install you can use `game -- %command%` in Launch Options without specifying the entire path.
 
 User install:
@@ -64,7 +69,8 @@ ln -s $PWD/dxvk ~/.config/dxvk
 ```
 
 netsock and the hypervisor loader (liblinuwux.so) are embedded in the binary and self-extract on first use, no setup needed. \
-netsock goes to `$HOME/.config/SLSsteam/tools/netsock/` and the hypervisor to `$HOME/.local/lib/`.
+netsock goes to `$HOME/.config/SLSsteam/tools/netsock/` and the hypervisor to `$HOME/.local/lib/`. \
+Both are also fetched from their upstream releases into `~/.config/game-launcher/payloads/`, see [Payloads](#payloads).
 
 Hypervisor setup and usage guide: https://cs.rin.ru/forum/viewtopic.php?f=20&t=160056 \
 Hypervisor requires mangohud to be disabled sometimes to fully work. (-hv)
@@ -118,7 +124,7 @@ Enabled by default (use the flag to disable):
 
 | Flag | Effect |
 | ---- | ------ |
-| `-g` | Disable GameMode |
+| `-g` | Disable GameMode (GameMode is also skipped automatically on BORE kernels and when ananicy-cpp is running, since both conflict with its renicing) |
 | `-h` | Disable MangoHud |
 | `-H` | Force MangoHud on (even in gaming mode) |
 | `-p` | Disable ProtonHax |
@@ -138,9 +144,10 @@ Disabled by default (use the flag to enable):
 | `-e` | Kill mod processes on exit |
 | `-f` | Enable LSFG-VK |
 | `-m` | Enable modding support (WINEDLLOVERRIDES="dwmapi=n,b;winhttp=n,b;winmm=n,b;version=n,b") |
-| `-F` | Enable LD_AUDIT with `$HOME/.config/SLSsteam/tools/netsock/netsock.so` (self-extracts if missing, merges with user-set LD_AUDIT) |
+| `-F` | Enable LD_AUDIT with `$HOME/.config/SLSsteam/tools/netsock/netsock.so` (installed from the payload cache if missing, merges with user-set LD_AUDIT) |
 | `-V` | Enable custom vkd3d-proton loading |
 | `-v` | Enable hypervisor loader: `LD_PRELOAD=$HOME/.local/lib/liblinuwux.so` and `PROTON_DISABLE_LSTEAMCLIENT=0` (self-extracts if missing) |
+| `-E` | Enable EOS-Proxy: replaces the game's `EOSSDK-Win64-Shipping.dll` with the proxy, skipped when the game is already patched |
 
 Valued flags:
 
@@ -150,16 +157,78 @@ Valued flags:
 | `-u MOD` | Add a background mod command (repeatable) |
 | `-r EXE` | Replace the launched executable |
 | `-d DLLS` | Add DLL overrides, semicolon separated (`dinput8=n,b;dxgi=n,b`) |
-| `-R` | Stage the game into a RAM disk |
 | `-i N` | Number of instances (accepted; currently inert) |
 
 Short flags may be bundled (`-ghk`) and valued flags accept attached or
 separate arguments (`-l1` or `-l 1`).
 
+Actions:
+
+| Flag | Effect |
+| ---- | ------ |
+| `-C` | Open the interactive config editor (`~/.config/game-launcher/config.toml`) and exit, ignoring any game command |
+
 ### Missing wrapper tools
 
 Before launch, each enabled wrapper (`gamemoderun`, `mangohud`, `protonhax`, `gamescope`, `wezterm`) is checked for on `PATH`. \
 If a wrapper is not installed it is skipped rather than causing a launch failure, and a `Wrapper not found, skipping: <name>` line is written to the log.
+
+GameMode is also skipped when the system would fight it: \
+with the BORE scheduler active (`kernel.sched_bore = 1`, or a `-bore` kernel) \
+or when ananicy-cpp is running, since both renice processes themselves.
+
+## Configuration
+
+Defaults live in `~/.config/game-launcher/config.toml`. \
+The file is written with commented defaults the first time the launcher runs and is never overwritten afterwards, so edits survive. \
+Values set there are the base for every launch, command line flags override them, and the list settings (`dll_overrides`, `mods`, `exports`) are appended to by their flags.
+
+Use `-C` to edit it in a terminal (TUI):
+
+- up/down (or `j`/`k`) select, enter/space toggles a boolean,
+- choice values such as the log level cycle with the left/right arrows or space,
+- enter on a value opens inline editing, enter commits and esc cancels,
+- enter on a list opens the list editor: enter edits an entry, `a` adds, `d` deletes.
+  Entries are one item each, for example `dinput8=n,b` in `dll_overrides`,
+  a command like `./mod-loader.sh` in `mods`, and `PROTON_NO_ESYNC=1` in `exports`
+  (an empty value, `VAR=`, unsets a variable).
+  The editor shows the example for each list.
+- `s` saves, `q` quits (with a save/discard prompt when there are unsaved changes).
+
+Saving rewrites the file through `toml_edit`, so comments and formatting are kept.
+`-C` is an action: it ignores any game command given alongside it.
+
+A config file that cannot be parsed is ignored as a whole, with the reason printed to stderr and written to the launch log; the built-in defaults are used instead. \
+`-C` needs a terminal, so run it from a shell rather than from Steam launch options.
+
+## Payloads
+
+Two payloads are fetched from their upstream releases and cached in
+`~/.config/game-launcher/payloads/`:
+
+| File | Source | Used by |
+| ---- | ------ | ------- |
+| `EOSSDK-Win64-Shipping.dll` | [eos-proxy](https://github.com/yesyes0649/eos-proxy) releases | `-E` |
+| `netsock.so` | [steamnetsock-patch](https://github.com/yesyes0649/steamnetsock-patch) releases (`fix.so`) | `-F` |
+
+Each payload is downloaded once. \
+If the download fails (offline, GitHub unreachable, curl missing) the copy embedded in the binary is used instead, and a failed download is not cached, so a later launch can still pick up the latest release. \
+Delete the cached file to force a refresh. \
+The [installer](#automatic-install) also refreshes both payloads on every install or reinstall.
+
+## EOS-Proxy (`-E`)
+
+Some Steam games use Epic Online Services for multiplayer. `-E` installs the
+[eos-proxy](https://github.com/yesyes0649/eos-proxy) dll into the game folder:
+
+- the game's `EOSSDK-Win64-Shipping.dll` is renamed to `EOSSDK-Win64-Shipping.yes` and the proxy dll is written in its place,
+- a game that already has the `.yes` backup is skipped, so later launches do nothing,
+- a game without `EOSSDK-Win64-Shipping.dll` is skipped: the proxy loads the original dll and cannot work without it,
+- only the 64 bit dll is handled,
+- the dll comes from the payload cache, see [Payloads](#payloads).
+
+Most games also need `ISteamUser::GetAuthTicketForWebApi` to return a non-error response before EOS networking works, \
+which is what SLSsteam with FakeAppIds, `uc-online2` or gbe_fork provide; `-F` is the launcher's helper for the SLSsteam route.
 
 ## Logging
 
@@ -184,12 +253,6 @@ A desktop notification (via `notify-send`, best effort) is sent when:
 
 - the game exits non-zero (a game crash), or
 - the wrapper cannot start the command (a `game` project failure).
-
-## RAM disk (`-R`)
-
-When enabled and the current directory is under a Steam `.../common/...` path, \
-the game directory is copied into a tmpfs mount, bind mounted in place, and synced back/unmounted on exit. These steps use `sudo` for mount, rsync, and umount. \
-Without `-R`, setup is skipped.
 
 ## Mods (`-u`)
 

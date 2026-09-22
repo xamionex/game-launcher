@@ -5,6 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::{App, EMPTY_MARKER};
+use crate::payload;
+
+/// Upstream release asset for the netsock patch (`fix.so`); fetched into the payload cache on first use and falling back to the embedded copy.
+const NETSNOCK_URL: &str =
+    "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so";
 
 /// Return the `lspci -vnn` lines describing display adapters, or an empty string if `lspci` is unavailable.
 fn gpu_info() -> String {
@@ -56,6 +61,57 @@ fn is_gaming_mode() -> bool {
         || (steam_game && desktop.eq_ignore_ascii_case("steam"))
 }
 
+/// The running kernel's release string, e.g. `6.12.7-bore`.
+fn kernel_release() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// True when the running kernel has the BORE scheduler active.
+///
+/// BORE kernels expose `kernel.sched_bore` (1 = enabled, the default); older patch sets are recognised by the release string instead.
+fn bore_scheduler_active() -> bool {
+    if let Ok(value) = std::fs::read_to_string("/proc/sys/kernel/sched_bore") {
+        return value.trim() == "1";
+    }
+    kernel_release().to_lowercase().contains("bore")
+}
+
+/// True when any running process has one of these `comm` names.
+fn process_running(names: &[&str]) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .filter(|n| n.chars().all(|c| c.is_ascii_digit()))
+        else {
+            continue;
+        };
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        if names.contains(&comm.trim()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Why `gamemoderun` should be skipped on this system, if anything.
+///
+/// GameMode and ananicy-cpp both renice processes, which fights and produces the stutter they are both meant to remove; BORE kernels already provide the responsiveness GameMode aims for.
+fn gamemode_conflict() -> Option<&'static str> {
+    if bore_scheduler_active() {
+        return Some("BORE scheduler active");
+    }
+    if process_running(&["ananicy-cpp", "ananicy"]) {
+        return Some("ananicy-cpp running");
+    }
+    None
+}
+
 /// Prepend `prefix` tokens to `cmd`, returning a new vector.
 fn prepend(prefix: &[&str], cmd: &[String]) -> Vec<String> {
     let mut out: Vec<String> = prefix.iter().map(|s| s.to_string()).collect();
@@ -84,10 +140,8 @@ fn command_exists(program: &str) -> bool {
 
 /// Prepend the LinuwUx hypervisor loader as the outermost wrapper.
 ///
-/// LinuwUx must run before MangoHud/Gamescope/etc. — when it ends up inside
-/// another wrapper (e.g. `mangohud linuwux ...`) the game frequently fails to
-/// start. Wrapping the whole chain in `env LD_PRELOAD=...` keeps it at the
-/// front while still handing the loader to the game and its helper processes.
+/// LinuwUx must run before MangoHud/Gamescope/etc. — when it ends up inside another wrapper (e.g. `mangohud linuwux ...`) the game frequently fails to start.
+/// Wrapping the whole chain in `env LD_PRELOAD=...` keeps it at the front while still handing the loader to the game and its helper processes.
 fn wrap_linuwux(app: &App, cmd: Vec<String>) -> Vec<String> {
     if !app.hypervisor {
         return cmd;
@@ -328,6 +382,14 @@ pub fn apply_wrappers(app: &mut App) {
         "wezterm",
         &["wezterm", "start", "--cwd", ".", "--"],
     );
+
+    // GameMode is skipped when it would fight the system's own scheduler setup.
+    if app.gamemode {
+        if let Some(reason) = gamemode_conflict() {
+            app.log(&format!("GameMode: {reason}, skipping gamemoderun"));
+            app.gamemode = false;
+        }
+    }
     cmd = maybe_wrap(app, cmd, app.gamemode, "gamemoderun", &["gamemoderun"]);
 
     // LinuwUx must sit at the very front of the chain: `linuwux mangohud ...`
@@ -353,8 +415,7 @@ fn merge_ld_audit(current: &str, netsock_path: &str) -> String {
 
 /// Write an embedded `.so` payload to `path`, creating parent directories.
 ///
-/// Logs a warning instead of failing when the write does not succeed; the
-/// launch is not blocked for this.
+/// Logs a warning instead of failing when the write does not succeed; the launch is not blocked for this.
 fn extract_so(app: &App, bytes: &[u8], path: &Path) {
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
@@ -383,14 +444,10 @@ fn hypervisor_path() -> Option<PathBuf> {
 
 /// Apply the captured custom exports, unsetting variables marked `(empty)`.
 ///
-/// After applying exports, `-F` self-extracts the embedded netsock loader to
-/// `$HOME/.config/SLSsteam/tools/netsock/netsock.so` when missing and merges it
-/// into `LD_AUDIT` (colon-separated), preserving any value the user set via
-/// `KEY=VALUE` or inherited from the environment.
+/// After applying exports, `-F` installs the netsock loader to `$HOME/.config/SLSsteam/tools/netsock/netsock.so` when it is missing and merges it into `LD_AUDIT` (colon-separated), preserving any value the user set via `KEY=VALUE` or inherited from the environment.
+/// The loader is taken from the payload cache when available (downloaded once, see [`crate::payload`]) and from the copy embedded in the binary otherwise.
 ///
-/// The `-v` hypervisor loader is applied earlier, in [`apply_wrappers`], so
-/// that it lands at the front of the command chain instead of leaking into
-/// every wrapper process via a global `LD_PRELOAD`.
+/// The `-v` hypervisor loader is applied earlier, in [`apply_wrappers`], so that it lands at the front of the command chain instead of leaking into every wrapper process via a global `LD_PRELOAD`.
 pub fn apply_environment_modifications(app: &App) {
     for export in &app.custom_exports {
         if export.value == EMPTY_MARKER {
@@ -404,7 +461,14 @@ pub fn apply_environment_modifications(app: &App) {
         if let Some(path) = netsock_path() {
             if !path.is_file() {
                 app.log(&format!("Extracting netsock loader to {}", path.display()));
-                extract_so(app, include_bytes!("../netsock.so"), &path);
+                if let Some(bytes) = payload::load(
+                    app,
+                    "netsock.so",
+                    NETSNOCK_URL,
+                    include_bytes!("../netsock.so"),
+                ) {
+                    extract_so(app, &bytes, &path);
+                }
             }
             let current = std::env::var("LD_AUDIT").unwrap_or_default();
             let merged = merge_ld_audit(&current, &path.to_string_lossy());
@@ -454,6 +518,19 @@ mod tests {
         // Missing absolute path and missing bare name are both false.
         assert!(!command_exists("/nonexistent/definitely/not/here_zzz"));
         assert!(!command_exists("game_wrapper_missing_binary_zzz123"));
+    }
+
+    #[test]
+    fn process_running_finds_the_current_process() {
+        let me = std::fs::read_to_string("/proc/self/comm").unwrap();
+        assert!(process_running(&[me.trim()]));
+        assert!(!process_running(&["game_missing_process_zzz"]));
+    }
+
+    #[test]
+    fn kernel_release_is_readable() {
+        // Guards the file used for the BORE fallback check.
+        assert!(!kernel_release().is_empty());
     }
 
     #[test]

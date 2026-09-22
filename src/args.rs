@@ -1,11 +1,9 @@
 //! Command-line parsing.
 //!
 //! Ports `parse_flags`/`print_help` from `game.sh`. The legacy `-v VAR=VALUE`
-//! flag is replaced by positional `KEY=VALUE` tokens (e.g.
-//! `game FLAG=1 -- %command%`); both feed the same custom-export pipeline that
-//! is logged and applied just before launch.
+//! flag is replaced by positional `KEY=VALUE` tokens (e.g. `game FLAG=1 -- %command%`); both feed the same custom-export pipeline that is logged and applied just before launch.
 
-use crate::config::{App, CustomExport, EMPTY_MARKER, MODDING_DLLS, ONLINEFIX_DLLS};
+use crate::config::{make_export, App, MODDING_DLLS, ONLINEFIX_DLLS};
 
 /// Why parsing failed, mirroring the original's two error paths.
 #[derive(Debug)]
@@ -39,30 +37,10 @@ fn is_assignment(token: &str) -> bool {
     false
 }
 
-/// Build a [`CustomExport`] from a `NAME=VALUE` string, capturing the current
-/// value of the variable for before/after logging.
-fn make_export(assignment: &str) -> CustomExport {
-    let (name, value) = match assignment.split_once('=') {
-        Some((n, v)) => (n.to_string(), v.to_string()),
-        None => (assignment.to_string(), String::new()),
-    };
-    let value = if value.is_empty() {
-        EMPTY_MARKER.to_string()
-    } else {
-        value
-    };
-    let before = std::env::var(&name).unwrap_or_else(|_| "(unset)".to_string());
-    CustomExport {
-        name,
-        before,
-        value,
-    }
-}
-
 /// Apply a single short flag character to `app`. Returns `Err` for unknown flags.
 fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
     match c {
-        'g' => app.gamemode = true,
+        'g' => app.gamemode = false,
         'h' => app.mangohud = false,
         'H' => app.mangohud_force = true,
         'p' => app.protonhax = false,
@@ -75,20 +53,22 @@ fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
         'V' => app.enable_custom_vkd3d = true,
         'o' => {
             app.onlinefix = true;
-            app.winedlloverrides_list
-                .extend(ONLINEFIX_DLLS.iter().map(|s| s.to_string()));
+            app.add_onlinefix_dlls();
         }
         'e' => app.cleanup_mods_on_exit = true,
         'f' => app.lsfg = true,
         'm' => {
             app.modding_support = true;
-            app.winedlloverrides_list
-                .extend(MODDING_DLLS.iter().map(|s| s.to_string()));
+            app.add_modding_dlls();
         }
         'L' => app.disable_sdl3 = true,
-        'R' => app.use_ramdisk = true,
+        // RAM disk staging is disabled for now: -R is accepted so existing
+        // launch options keep working, but it does nothing.
+        'R' => {}
         'F' => app.fix_audit = true,
         'v' => app.hypervisor = true,
+        'E' => app.eos_proxy = true,
+        'C' => app.config_tui = true,
         _ => return Err(ParseError::Usage),
     }
     Ok(())
@@ -124,8 +104,8 @@ fn apply_value_flag(app: &mut App, c: char, value: String) -> Result<(), ParseEr
 
 /// Parse the argument vector (excluding the program name) into `app`.
 ///
-/// Returns `Err(message)` when usage is invalid; callers should print help and
-/// exit non-zero. Everything after the first `--` becomes the original command.
+/// Returns `Err(message)` when usage is invalid; callers should print help and exit non-zero.
+/// Everything after the first `--` becomes the original command.
 pub fn parse_flags(app: &mut App, args: &[String]) -> Result<(), ParseError> {
     if args.is_empty() {
         return Err(ParseError::Usage);
@@ -143,8 +123,7 @@ pub fn parse_flags(app: &mut App, args: &[String]) -> Result<(), ParseError> {
         let token = &before[i];
 
         if token == "-" {
-            // Lone dash: not a flag. In `--` mode it is ignored; without `--`
-            // it begins the command.
+            // Lone dash: not a flag. In `--` mode it is ignored; without `--` it begins the command.
             if after.is_some() {
                 i += 1;
                 continue;
@@ -178,9 +157,8 @@ pub fn parse_flags(app: &mut App, args: &[String]) -> Result<(), ParseError> {
             app.custom_exports.push(make_export(token));
             i += 1;
         } else {
-            // A bare token. Without `--`, it starts the command; with `--` the
-            // command comes from after the separator, so stray tokens are
-            // ignored (matching getopts stopping at the first non-option).
+            // A bare token.
+            // Without `--`, it starts the command; with `--` the command comes from after the separator, so stray tokens are ignored (matching getopts stopping at the first non-option).
             if after.is_none() {
                 app.original_cmd = before[i..].to_vec();
             }
@@ -195,15 +173,19 @@ pub fn parse_flags(app: &mut App, args: &[String]) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Print usage to stderr and best-effort desktop notification.
-pub fn print_help(prog: &str) {
+/// Notify the user about an invalid invocation (best effort desktop notification).
+pub fn notify_invalid_usage() {
     crate::config::notify("Invalid Usage, Check your flags", "");
+}
 
+/// Print usage to stderr.
+pub fn print_help(prog: &str) {
     let onlinefix = ONLINEFIX_DLLS.join(";");
     let modding_support = MODDING_DLLS.join(";");
     eprintln!("Usage: {prog} [options] [VAR=VALUE ...] -- %command%");
     eprintln!();
     eprintln!("== Enabled by default (can be disabled) ==");
+    eprintln!("  -g            Disable GameMode (also skipped automatically on BORE kernels or with ananicy-cpp running)");
     eprintln!("  -h            Disable MangoHud");
     eprintln!("  -H            Force MangoHud on (even in gaming mode)");
     eprintln!("  -p            Disable ProtonHax");
@@ -211,7 +193,6 @@ pub fn print_help(prog: &str) {
     eprintln!("  -X            Force disable Wayland");
     eprintln!();
     eprintln!("== Disabled by default (can be enabled) ==");
-    eprintln!("  -g            Enable GameMode");
     eprintln!("  -P            Enable Pressure Vessel elimination");
     eprintln!("  -L            Enable SDL3 elimination in Steam runtime (sets STEAM_COMPAT_RUNTIME_SDL3=0)");
     eprintln!("  -s            Enable Gamescope (X11 backend)");
@@ -221,19 +202,20 @@ pub fn print_help(prog: &str) {
     eprintln!("  -e            Cleanup mods on exit");
     eprintln!("  -f            Enable LSFG-VK");
     eprintln!("  -m            Enable modding support (WINEDLLOVERRIDES={modding_support})");
-    eprintln!(
-        "  -F            Enable LD_AUDIT with $HOME/.config/SLSsteam/tools/netsock/netsock.so (merges with user-set LD_AUDIT)"
-    );
+    eprintln!("  -F            Enable LD_AUDIT with $HOME/.config/SLSsteam/tools/netsock/netsock.so");
     eprintln!("  -V            Enable custom vkd3d-proton loading (~/Projects/vkd3d-proton/build/vkd3d-proton-master)");
     eprintln!("  -v            Enable hypervisor loader (LD_PRELOAD=$HOME/.local/lib/liblinuwux.so, sets PROTON_DISABLE_LSTEAMCLIENT=0)");
     eprintln!("                Might require you to disable mangohud with -h");
+    eprintln!("  -E            Enable EOS-Proxy (replaces the game's EOSSDK-Win64-Shipping.dll, skips games already patched)");
+    eprintln!();
+    eprintln!("== Actions ==");
+    eprintln!("  -C            Open the interactive config editor (~/.config/game-launcher/config.toml) and exit");
     eprintln!();
     eprintln!("== Flags that accept values or lists ==");
     eprintln!("  -l LEVEL      Set logging level (-1: silent, 0: normal, 1: verbose)");
     eprintln!("  -u MOD        Add a mod to be launched (can be used multiple times)");
     eprintln!("  -r EXE        Replace the default executable");
     eprintln!("  -d DLLS       Add DLL overrides (semicolon-separated, e.g. dinput8=n,b;dxgi=n,b)");
-    eprintln!("  -R            Load the game into a RAM disk");
     eprintln!("  -i N          Number of instances");
     eprintln!();
     eprintln!("== Environment variables ==");
@@ -249,6 +231,7 @@ pub fn print_help(prog: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::EMPTY_MARKER;
 
     fn v(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -291,8 +274,16 @@ mod tests {
     fn bundled_boolean_flags() {
         let mut app = App::default();
         parse_flags(&mut app, &v(&["-gh", "--", "x"])).unwrap();
-        assert!(app.gamemode);
+        assert!(!app.gamemode);
         assert!(!app.mangohud);
+    }
+
+    #[test]
+    fn gamemode_is_on_by_default_and_g_disables_it() {
+        let mut app = App::default();
+        assert!(app.gamemode);
+        parse_flags(&mut app, &v(&["-g", "--", "x"])).unwrap();
+        assert!(!app.gamemode);
     }
 
     #[test]
@@ -339,8 +330,8 @@ mod tests {
     #[test]
     fn command_without_double_dash() {
         let mut app = App::default();
-        parse_flags(&mut app, &v(&["-g", "FOO=1", "/bin/game", "arg"])).unwrap();
-        assert!(app.gamemode);
+        parse_flags(&mut app, &v(&["-h", "FOO=1", "/bin/game", "arg"])).unwrap();
+        assert!(!app.mangohud);
         assert_eq!(app.custom_exports.len(), 1);
         assert_eq!(app.original_cmd, v(&["/bin/game", "arg"]));
     }
@@ -369,6 +360,30 @@ mod tests {
     }
 
     #[test]
+    fn eos_proxy_is_off_by_default_and_enabled_by_flag() {
+        let mut app = App::default();
+        assert!(!app.eos_proxy);
+        parse_flags(&mut app, &v(&["-E", "--", "x"])).unwrap();
+        assert!(app.eos_proxy);
+    }
+
+    #[test]
+    fn config_editor_flag_is_parsed_without_a_command() {
+        let mut app = App::default();
+        assert!(!app.config_tui);
+        parse_flags(&mut app, &v(&["-C"])).unwrap();
+        assert!(app.config_tui);
+    }
+
+    #[test]
+    fn config_editor_flag_ignores_a_following_command() {
+        let mut app = App::default();
+        parse_flags(&mut app, &v(&["-C", "--", "/bin/game"])).unwrap();
+        assert!(app.config_tui);
+        assert_eq!(app.original_cmd, v(&["/bin/game"]));
+    }
+
+    #[test]
     fn pressure_vessel_disabled_by_default_enabled_by_flag() {
         let mut app = App::default();
         assert!(!app.pressure_vessel);
@@ -386,8 +401,7 @@ mod tests {
 
     #[test]
     fn speedhack_flag_removed() {
-        // `-k` used to disable speedhack; the layer is removed entirely now,
-        // so the flag is unknown and requests usage.
+        // `-k` used to disable speedhack; the layer is removed entirely now, so the flag is unknown and requests usage.
         let mut app = App::default();
         assert!(matches!(
             parse_flags(&mut app, &v(&["-k", "--", "x"])),

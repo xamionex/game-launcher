@@ -1,11 +1,8 @@
 //! Configuration defaults and shared runtime state.
-//!
-//! Mirrors the variable block at the top of the original `game.sh`.
 
 use std::path::PathBuf;
 
-/// Number of plain `.log` files kept per game folder; older ones are archived
-/// to `.tar.gz` on the next launch.
+/// Number of plain `.log` files kept per game folder; older ones are archived to `.tar.gz` on the next launch.
 pub const MAX_LOGS: usize = 3;
 /// tmpfs mount point used for RAM-disk loading.
 pub const RAM_MOUNT: &str = "/mnt/gameram";
@@ -24,9 +21,8 @@ pub const MODDING_DLLS: &[&str] = &["dwmapi=n,b", "winhttp=n,b", "winmm=n,b", "v
 
 /// A custom environment export captured from a positional `KEY=VALUE` token.
 ///
-/// `value` holds the literal `(empty)` marker when the user requested an unset
-/// (e.g. `LD_PRELOAD=`), matching the original script semantics.
-#[derive(Debug, Clone)]
+/// `value` holds the literal `(empty)` marker when the user requested an unset (e.g. `LD_PRELOAD=`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CustomExport {
     pub name: String,
     pub before: String,
@@ -36,8 +32,30 @@ pub struct CustomExport {
 /// Sentinel stored in [`CustomExport::value`] meaning "unset this variable".
 pub const EMPTY_MARKER: &str = "(empty)";
 
+/// Build a [`CustomExport`] from a `NAME=VALUE` string, capturing the current value of the variable for before/after logging.
+pub fn make_export(assignment: &str) -> CustomExport {
+    let (name, value) = match assignment.split_once('=') {
+        Some((n, v)) => (n.to_string(), v.to_string()),
+        None => (assignment.to_string(), String::new()),
+    };
+    let value = if value.is_empty() {
+        EMPTY_MARKER.to_string()
+    } else {
+        value
+    };
+    let before = std::env::var(&name).unwrap_or_else(|_| "(unset)".to_string());
+    CustomExport {
+        name,
+        before,
+        value,
+    }
+}
+
 /// Parsed flags plus runtime state, threaded through the launch pipeline.
-#[derive(Debug)]
+///
+/// `PartialEq` is derived so tests can assert that the config file defaults
+/// match [`App::default`].
+#[derive(Debug, PartialEq)]
 pub struct App {
     // === Toggles enabled by default (can be disabled) ===
     pub gamemode: bool,
@@ -63,6 +81,12 @@ pub struct App {
     pub fix_audit: bool,
     /// Enable LinuwUx hypervisor loader via `LD_PRELOAD` (the `-v` flag).
     pub hypervisor: bool,
+    /// Swap the game's `EOSSDK-Win64-Shipping.dll` for the EOS proxy (the `-E` flag).
+    pub eos_proxy: bool,
+
+    /// Open the interactive config editor and exit (the `-C` flag).
+    /// Not a config file setting; it is a command-line action.
+    pub config_tui: bool,
 
     // === Valued flags ===
     pub logging_level: i32,
@@ -95,7 +119,7 @@ pub struct App {
 impl Default for App {
     fn default() -> Self {
         App {
-            gamemode: false,
+            gamemode: true,
             mangohud: true,
             mangohud_force: false,
             protonhax: true,
@@ -114,6 +138,9 @@ impl Default for App {
             modding_support: false,
             fix_audit: false,
             hypervisor: false,
+            eos_proxy: false,
+
+            config_tui: false,
 
             logging_level: 0,
             instances: 1,
@@ -143,10 +170,19 @@ impl Default for App {
 }
 
 impl App {
+    /// Append the OnlineFix DLL overrides, shared by the `-o` flag and the `onlinefix` config setting.
+    pub fn add_onlinefix_dlls(&mut self) {
+        self.winedlloverrides_list
+            .extend(ONLINEFIX_DLLS.iter().map(|s| s.to_string()));
+    }
+
+    /// Append the modding-support DLL overrides, shared by the `-m` flag and the `modding_support` config setting.
+    pub fn add_modding_dlls(&mut self) {
+        self.winedlloverrides_list
+            .extend(MODDING_DLLS.iter().map(|s| s.to_string()));
+    }
+
     /// Append a line to the active log file, if logging is enabled.
-    ///
-    /// Mirrors `echo ... >> "$LOG_FILE"`; a no-op when no log file is set
-    /// (e.g. silent mode), and errors are ignored just like the shell.
     pub fn log(&self, msg: &str) {
         if let Some(path) = &self.log_file {
             use std::io::Write;
