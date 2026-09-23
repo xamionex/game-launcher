@@ -169,6 +169,7 @@ Actions:
 | Flag | Effect |
 | ---- | ------ |
 | `-C` | Open the interactive config editor (`~/.config/game-launcher/config.toml`) and exit, ignoring any game command |
+| `-k` | Open the launch options generator, copy the resulting Steam launch options line to the clipboard and exit, ignoring any game command |
 
 ### Missing wrapper tools
 
@@ -195,7 +196,7 @@ Use `-C` to edit it in a terminal (TUI):
   a command like `./mod-loader.sh` in `mods`, and `PROTON_NO_ESYNC=1` in `exports`
   (an empty value, `VAR=`, unsets a variable).
   The editor shows the example for each list.
-- `s` saves, `q` quits (with a save/discard prompt when there are unsaved changes).
+- `s` saves, `q` quits (with a save/discard prompt when there are unsaved changes), and `ctrl+c` quits at once without saving.
 
 Saving rewrites the file through `toml_edit`, so comments and formatting are kept.
 `-C` is an action: it ignores any game command given alongside it.
@@ -210,6 +211,26 @@ The launcher exports it as `WAYLANDDRV_PRIMARY_MONITOR` and, when Wayland is off
 
 Next to the picker the editor shows `this terminal: <output>`, so the names can be told apart (KWin, Hyprland and Sway can report which output the focused window is on). \
 On the monitor row, `i` refreshes that and lists every detected output with its resolution and position, marking the one the editor is running on.
+
+## Launch options generator (`-k`)
+
+`-k` opens the same kind of form as `-C`, but it builds the line you paste into a game's Launch Options in Steam instead of saving anything:
+
+```
+game -s -m -u ./mod-loader.sh PROTON_NO_ESYNC=1 -- %command%
+```
+
+The rows start from your config, and the config file is only read, so the tool is safe to open at any time. \
+Only what you change becomes a flag, which is what per game tweaks need: uncheck MangoHud for one game and the line grows `-h`, enable modding support and it grows `-m`. \
+Changing nothing gives a bare `game -- %command%`, and the line is shown in the footer while you edit.
+
+- `enter` or `space` toggles a boolean, cycles a choice, or opens the value and list editors, exactly like `-C`;
+- `p` switches between `game` and the absolute path of the running binary, for setups where `PATH` does not have it (a root install makes `game` enough, gaming mode may need the path);
+- `s` copies the line without leaving, `q` (or `esc`) copies it and exits, `ctrl+c` exits without copying;
+- changes a flag cannot express are listed in the footer: a boolean your config turned off cannot be turned back on by a flag, and a list entry can be added by a flag but not removed, so those cases point at `-C`.
+
+The copy is done with the first of `wl-copy`, `xclip`, `xsel` or `pbcopy` that works. \
+The line is always printed to the terminal as well, so a machine without a clipboard tool still shows it.
 
 ## Payloads
 

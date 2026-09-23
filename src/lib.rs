@@ -59,6 +59,17 @@ pub fn run() -> i32 {
         };
     }
 
+    // `-k` is an action too: choose flags, then copy the launch options line and exit. The config file is not touched.
+    if app.generator_tui {
+        return match tui::run_generator() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Launch options generator: {e}");
+                1
+            }
+        };
+    }
+
     if app.logging_level >= 0 {
         logging::setup_logging(&mut app);
     }

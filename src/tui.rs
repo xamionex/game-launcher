@@ -1,8 +1,9 @@
-//! Interactive config editor (the `-C` flag).
+//! Interactive config editor (the `-C` flag) and launch options generator (the `-k` flag).
 //!
 //! A ratatui form over the TOML document: booleans toggle with space or enter, values are edited inline, and lists open a sub-editor where entries can be added, edited and removed.
-//! Saving rewrites the config file through `toml_edit`, so comments and formatting survive. `-C` is an action:
-//! the editor exits after saving or discarding, and never launches a game.
+//! Saving rewrites the config file through `toml_edit`, so comments and formatting survive.
+//! Both flags are actions: the editor exits after saving or discarding, the generator exits after copying the launch options line, and neither launches a game.
+//! Ctrl+C leaves either of them at once, without saving and without copying.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -267,9 +268,19 @@ struct TextEdit {
     key: String,
     /// Index of the list entry being edited, when a list entry is edited.
     entry: Option<usize>,
+    /// True when the edit inserts a new entry at `entry` instead of replacing one.
+    adding: bool,
     buffer: String,
     /// Cursor position as a character index into `buffer`.
     cursor: usize,
+}
+
+/// What the editor is for.
+enum Purpose {
+    /// `-C`: the document is the config file and `s` writes it back.
+    Config,
+    /// `-k`: the document holds the choices, the loaded config is kept as the base, and only the differences become launch flags.
+    LaunchOptions { base: DocumentMut },
 }
 
 /// Editor mode.
@@ -283,6 +294,14 @@ struct Editor {
     doc: DocumentMut,
     path: PathBuf,
     mode: Mode,
+    /// Whether this run edits the config file or generates a launch options line.
+    purpose: Purpose,
+    /// Set by Ctrl+C: leave without saving and without copying.
+    cancelled: bool,
+    /// Path of the running binary, offered instead of `game` in the generated line.
+    binary: String,
+    /// Put the absolute binary path in the generated line.
+    absolute: bool,
     /// Index into the entries vector built from [`FIELDS`].
     selection: usize,
     list_selection: usize,
@@ -305,10 +324,53 @@ impl Editor {
         active_monitor: Option<String>,
         gpu_wayland: bool,
     ) -> Editor {
+        Editor::with_purpose(
+            path,
+            doc,
+            monitors,
+            active_monitor,
+            gpu_wayland,
+            Purpose::Config,
+        )
+    }
+
+    /// The `-k` editor: the loaded config is the base, and what the user changes becomes launch flags.
+    fn new_generator(
+        path: PathBuf,
+        doc: DocumentMut,
+        monitors: Vec<Monitor>,
+        active_monitor: Option<String>,
+        gpu_wayland: bool,
+    ) -> Editor {
+        let base = doc.clone();
+        Editor::with_purpose(
+            path,
+            doc,
+            monitors,
+            active_monitor,
+            gpu_wayland,
+            Purpose::LaunchOptions { base },
+        )
+    }
+
+    fn with_purpose(
+        path: PathBuf,
+        doc: DocumentMut,
+        monitors: Vec<Monitor>,
+        active_monitor: Option<String>,
+        gpu_wayland: bool,
+        purpose: Purpose,
+    ) -> Editor {
         Editor {
             doc,
             path,
             mode: Mode::Form,
+            purpose,
+            cancelled: false,
+            binary: std::env::current_exe()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|_| "game".to_string()),
+            absolute: false,
             selection: 0,
             list_selection: 0,
             dirty: false,
@@ -318,6 +380,11 @@ impl Editor {
             active_monitor,
             gpu_wayland,
         }
+    }
+
+    /// True while the `-k` generator is running.
+    fn is_generator(&self) -> bool {
+        matches!(self.purpose, Purpose::LaunchOptions { .. })
     }
 
     // ---- document access ----
@@ -586,6 +653,7 @@ impl Editor {
                 self.mode = Mode::EditText(TextEdit {
                     key: field.key.to_string(),
                     entry: None,
+                    adding: false,
                     cursor: buffer.chars().count(),
                     buffer,
                 });
@@ -598,6 +666,7 @@ impl Editor {
                 self.mode = Mode::EditText(TextEdit {
                     key: field.key.to_string(),
                     entry: None,
+                    adding: false,
                     buffer: self.get_text(field.key),
                     cursor: self.get_text(field.key).chars().count(),
                 });
@@ -619,12 +688,144 @@ impl Editor {
         }
     }
 
+    // ---- launch options (-k) ----
+
+    /// Program name used by the generated line.
+    fn program(&self) -> String {
+        if self.absolute {
+            self.binary.clone()
+        } else {
+            "game".to_string()
+        }
+    }
+
+    /// Flags for everything the user changed, plus a note for changes no flag can express.
+    fn launch_flags(&self) -> (Vec<String>, Vec<String>) {
+        let Purpose::LaunchOptions { base } = &self.purpose else {
+            return (Vec::new(), Vec::new());
+        };
+        let defaults = config_file::default_document();
+        let mut flags: Vec<String> = Vec::new();
+        let mut notes: Vec<String> = Vec::new();
+
+        for field in FIELDS {
+            let key = field.key;
+            let Some(default_item) = defaults.get(key) else {
+                continue;
+            };
+            match Kind::of(default_item) {
+                Kind::Bool => {
+                    let target = self.get_bool(key);
+                    let base_value = base.get(key).and_then(Item::as_bool).unwrap_or(false);
+                    if target == base_value {
+                        continue;
+                    }
+                    let built_in = default_item.as_bool().unwrap_or(false);
+                    if target != built_in && !field.flag.is_empty() {
+                        // The flag flips the built-in default, which is exactly what the change asks for.
+                        flags.push(field.flag.to_string());
+                    } else {
+                        notes.push(format!(
+                            "{key}: your config sets this and no flag covers it, use -C"
+                        ));
+                    }
+                }
+                Kind::Integer => {
+                    let target = self.get_integer(key);
+                    let base_value = base.get(key).and_then(Item::as_integer).unwrap_or(0);
+                    if target == base_value || field.flag.is_empty() {
+                        continue;
+                    }
+                    flags.push(format!("{} {}", field.flag, target));
+                }
+                Kind::Text => {
+                    let target = self.get_text(key);
+                    let base_value = base
+                        .get(key)
+                        .and_then(Item::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    if target == base_value || field.flag.is_empty() || target.is_empty() {
+                        continue;
+                    }
+                    flags.push(format!("{} {}", field.flag, shell_quote(&target)));
+                }
+                Kind::List => {
+                    let target = self.get_list(key);
+                    let base_list = base
+                        .get(key)
+                        .and_then(Item::as_array)
+                        .map(|array| {
+                            array
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect::<Vec<String>>()
+                        })
+                        .unwrap_or_default();
+                    let added: Vec<String> = target
+                        .iter()
+                        .filter(|item| !base_list.contains(*item))
+                        .cloned()
+                        .collect();
+                    if base_list.iter().any(|item| !target.contains(item)) {
+                        notes.push(format!(
+                            "{key}: a flag can only add entries, use -C to remove one"
+                        ));
+                    }
+                    if added.is_empty() {
+                        continue;
+                    }
+                    match key {
+                        // Environment exports are positional tokens, not a flag.
+                        "exports" => flags.extend(added.iter().map(|item| shell_quote(item))),
+                        // DLL overrides travel as one semicolon separated argument.
+                        "dll_overrides" => {
+                            flags.push(format!("{} {}", field.flag, shell_quote(&added.join(";"))))
+                        }
+                        _ => flags.extend(
+                            added
+                                .iter()
+                                .map(|item| format!("{} {}", field.flag, shell_quote(item))),
+                        ),
+                    }
+                }
+            }
+        }
+        (flags, notes)
+    }
+
+    /// The launch options line as it would be pasted into Steam.
+    fn generated_line(&self) -> String {
+        let (flags, _) = self.launch_flags();
+        let mut parts = vec![self.program()];
+        parts.extend(flags);
+        parts.push("--".to_string());
+        parts.push("%command%".to_string());
+        parts.join(" ")
+    }
+
+    /// Copy the current line without leaving the generator.
+    fn copy_now(&mut self) {
+        let line = self.generated_line();
+        self.status = match copy_to_clipboard(&line) {
+            Ok(tool) => format!("Copied to the clipboard with {tool}"),
+            Err(e) => format!("Could not copy: {e}"),
+        };
+    }
+
     // ---- input ----
 
     /// Handle one key press; returns `true` when the editor should exit.
     fn handle_key(&mut self, key: KeyEvent) -> Result<bool, String> {
         if key.kind != KeyEventKind::Press {
             return Ok(false);
+        }
+
+        // Ctrl+C leaves at once, whatever is open: no save, no copy, no confirm.
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.cancelled = true;
+            return Ok(true);
         }
 
         if self.confirm_quit {
@@ -655,6 +856,10 @@ impl Editor {
     fn handle_form(&mut self, key: KeyEvent) -> Result<bool, String> {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
+                if self.is_generator() {
+                    // Nothing is saved in the generator, so there is nothing to confirm.
+                    return Ok(true);
+                }
                 if self.dirty {
                     self.confirm_quit = true;
                     return Ok(false);
@@ -662,13 +867,22 @@ impl Editor {
                 return Ok(true);
             }
             KeyCode::Char('s') => {
-                self.save()?;
+                if self.is_generator() {
+                    self.copy_now();
+                } else {
+                    self.save()?;
+                }
             }
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::Char('i') if FIELDS[self.selected_field()].key == "wayland_monitor" => {
                 self.refresh_active_monitor();
                 self.status = self.monitor_summary();
+            }
+            // In the generator the line can name the binary by path, which is what gaming mode needs.
+            KeyCode::Char('p') if self.is_generator() => {
+                self.absolute = !self.absolute;
+                self.status = format!("Program: {}", self.program());
             }
             KeyCode::PageUp => self.move_selection(-5),
             KeyCode::PageDown => self.move_selection(5),
@@ -705,13 +919,8 @@ impl Editor {
             return;
         };
         match key.code {
-            KeyCode::Esc => {
-                self.mode = Mode::Form;
-            }
-            KeyCode::Enter => {
-                self.commit_edit();
-                self.mode = Mode::Form;
-            }
+            KeyCode::Esc => self.cancel_edit(),
+            KeyCode::Enter => self.commit_edit(),
             KeyCode::Backspace => {
                 if edit.cursor > 0 {
                     edit.cursor -= 1;
@@ -740,6 +949,21 @@ impl Editor {
         }
     }
 
+    /// Leave the text editor without writing anything.
+    ///
+    /// A list entry goes back to the list, which is where the user came from.
+    fn cancel_edit(&mut self) {
+        let Mode::EditText(edit) = &self.mode else {
+            return;
+        };
+        let entry = edit.entry;
+        self.mode = if entry.is_some() {
+            Mode::EditList
+        } else {
+            Mode::Form
+        };
+    }
+
     /// Write the text buffer back into the document (or the edited list entry).
     fn commit_edit(&mut self) {
         let Mode::EditText(edit) = &self.mode else {
@@ -748,13 +972,30 @@ impl Editor {
         let key = edit.key.clone();
         let buffer = edit.buffer.clone();
         let entry = edit.entry;
+        let adding = edit.adding;
 
         if let Some(index) = entry {
             let mut items = self.get_list(&key);
-            if index < items.len() {
-                items[index] = buffer;
-                self.set_list(&key, &items);
+            if adding {
+                let at = index.min(items.len());
+                if buffer.trim().is_empty() {
+                    self.status = format!("{key}: empty entry not added");
+                } else {
+                    items.insert(at, buffer);
+                    self.set_list(&key, &items);
+                    self.list_selection = at;
+                }
+            } else if index < items.len() {
+                if buffer.trim().is_empty() {
+                    self.status = format!("{key}: empty entry not saved");
+                } else {
+                    items[index] = buffer;
+                    self.set_list(&key, &items);
+                    self.list_selection = index;
+                }
             }
+            // Stay in the list the entry came from instead of jumping back to the form.
+            self.mode = Mode::EditList;
             return;
         }
 
@@ -780,6 +1021,7 @@ impl Editor {
             },
             _ => self.set_value(&key, Value::from(buffer)),
         }
+        self.mode = Mode::Form;
     }
 
     fn handle_edit_list(&mut self, key: KeyEvent) {
@@ -800,13 +1042,11 @@ impl Editor {
                 }
             }
             KeyCode::Char('a') => {
-                let mut items = items;
-                items.push(String::new());
-                self.set_list(&field_key, &items);
-                self.list_selection = items.len() - 1;
+                // The entry is only inserted when the text is committed, so cancelling adds nothing.
                 self.mode = Mode::EditText(TextEdit {
                     key: field_key,
-                    entry: Some(self.list_selection),
+                    entry: Some(items.len()),
+                    adding: true,
                     buffer: String::new(),
                     cursor: 0,
                 });
@@ -816,6 +1056,7 @@ impl Editor {
                     self.mode = Mode::EditText(TextEdit {
                         key: field_key,
                         entry: Some(self.list_selection),
+                        adding: false,
                         buffer: value.clone(),
                         cursor: value.chars().count(),
                     });
@@ -834,12 +1075,14 @@ impl Editor {
     // ---- rendering ----
 
     fn render(&mut self, frame: &mut Frame) {
+        // The generator shows one more line: the launch options line itself.
+        let footer = if self.is_generator() { 7 } else { 5 };
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
                 Constraint::Min(3),
-                Constraint::Length(5),
+                Constraint::Length(footer),
             ])
             .split(frame.area());
 
@@ -857,12 +1100,20 @@ impl Editor {
     }
 
     fn render_header(&self, frame: &mut Frame, area: Rect) {
-        let modified = if self.dirty { " (modified)" } else { "" };
-        let text = Line::from(vec![
-            Span::styled("game-launcher config", Style::new().bold()),
-            Span::raw(modified.to_string()),
-        ]);
-        let path = Line::from(self.path.display().to_string()).dim();
+        let (title, second) = if self.is_generator() {
+            (
+                "game-launcher launch options",
+                format!("{} (read only, nothing is saved)", self.path.display()),
+            )
+        } else {
+            let modified = if self.dirty { " (modified)" } else { "" };
+            (
+                "game-launcher config",
+                format!("{}{modified}", self.path.display()),
+            )
+        };
+        let text = Line::from(Span::styled(title, Style::new().bold()));
+        let path = Line::from(second).dim();
         let block = Paragraph::new(vec![text, path]).block(Block::default().borders(Borders::ALL));
         frame.render_widget(block, area);
     }
@@ -1012,10 +1263,19 @@ impl Editor {
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let field = &FIELDS[self.selected_field()];
-        let keys = match &self.mode {
-            Mode::EditText(_) => "enter commit   esc cancel   <-/-> move   backspace delete",
-            Mode::EditList => "up/down select   enter edit   a add   d delete   esc back",
-            Mode::Form => "up/down select   space toggle/cycle   enter edit   s save   q quit",
+        let keys = match (&self.mode, self.is_generator()) {
+            (Mode::EditText(_), _) => {
+                "enter commit   esc cancel   <-/-> move   backspace delete   ctrl+c quit without saving"
+            }
+            (Mode::EditList, _) => {
+                "up/down select   enter edit   a add   d delete   esc back   ctrl+c quit without saving"
+            }
+            (Mode::Form, true) => {
+                "up/down select   space toggle/cycle   enter edit   p program   s copy now   q copy and quit   ctrl+c quit without saving"
+            }
+            (Mode::Form, false) => {
+                "up/down select   space toggle/cycle   enter edit   s save   q quit   ctrl+c quit without saving"
+            }
         };
         let help = if field.key == "wayland_monitor" {
             let mut text = format!("{}. Press i to list the monitors.", field.help);
@@ -1032,11 +1292,21 @@ impl Editor {
         } else {
             field.help.to_string()
         };
-        let lines = vec![
-            Line::from(help),
-            Line::from(keys).dim(),
-            Line::from(self.status.clone()),
-        ];
+        let mut lines = Vec::new();
+        if self.is_generator() {
+            lines.push(Line::from(vec![
+                Span::raw("Launch options: "),
+                Span::styled(self.generated_line(), Style::new().fg(Color::Cyan)),
+            ]));
+        }
+        lines.push(Line::from(help));
+        lines.push(Line::from(keys).dim());
+        lines.push(Line::from(self.status.clone()));
+        if self.is_generator() {
+            // Changes a flag cannot express (config overrides, removed list entries).
+            let (_, notes) = self.launch_flags();
+            lines.push(Line::from(notes.join("; ")).dim());
+        }
         let block = Paragraph::new(lines)
             .block(Block::default().borders(Borders::ALL))
             .wrap(Wrap { trim: true });
@@ -1054,8 +1324,8 @@ impl Editor {
         frame.render_widget(text, area);
     }
 
-    /// Draw, read keys, repeat. Returns `Ok(())` when the user leaves.
-    fn run_loop(mut self, mut terminal: DefaultTerminal) -> Result<(), String> {
+    /// Draw, read keys, repeat. Returns the launch options line to copy, when there is one.
+    fn run_loop(mut self, mut terminal: DefaultTerminal) -> Result<Option<String>, String> {
         loop {
             terminal
                 .draw(|frame| self.render(frame))
@@ -1063,7 +1333,10 @@ impl Editor {
             let event = event::read().map_err(|e| e.to_string())?;
             if let Event::Key(key) = event {
                 if self.handle_key(key)? {
-                    return Ok(());
+                    if self.is_generator() && !self.cancelled {
+                        return Ok(Some(self.generated_line()));
+                    }
+                    return Ok(None);
                 }
             }
         }
@@ -1107,10 +1380,10 @@ fn complete_document(doc: &mut DocumentMut, defaults: &DocumentMut) {
     }
 }
 
-/// Open the config editor. Returns an error message for the caller to print.
-pub fn run() -> Result<(), String> {
+/// Load the config file and the detection state both editors need.
+fn open_editor(name: &str, generator: bool) -> Result<Editor, String> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        return Err("the config editor needs an interactive terminal".to_string());
+        return Err(format!("the {name} needs an interactive terminal"));
     }
     let Some(path) = config_file::config_path() else {
         return Err("could not resolve a config directory".to_string());
@@ -1126,16 +1399,106 @@ pub fn run() -> Result<(), String> {
     let mut probe = crate::config::App::default();
     crate::wrappers::determine_wayland_by_gpu(&mut probe);
 
-    let mut editor = Editor::new(path, doc, monitors, active_monitor, probe.wayland_enabled);
+    let mut editor = if generator {
+        Editor::new_generator(path, doc, monitors, active_monitor, probe.wayland_enabled)
+    } else {
+        Editor::new(path, doc, monitors, active_monitor, probe.wayland_enabled)
+    };
     editor.jump_to_first();
     if let Some(warning) = warning {
         editor.status = warning;
     }
+    Ok(editor)
+}
 
+/// Open the config editor. Returns an error message for the caller to print.
+pub fn run() -> Result<(), String> {
+    let editor = open_editor("config editor", false)?;
     let terminal = ratatui::init();
     let result = editor.run_loop(terminal);
     ratatui::restore();
-    result
+    result.map(|_| ())
+}
+
+/// Open the launch options generator (`-k`). The config file is only read, never written.
+pub fn run_generator() -> Result<(), String> {
+    let editor = open_editor("launch options generator", true)?;
+    let terminal = ratatui::init();
+    let result = editor.run_loop(terminal);
+    ratatui::restore();
+    if let Some(line) = result? {
+        report_generated(&line);
+    }
+    Ok(())
+}
+
+/// Print the generated line and put it on the clipboard, so a missing clipboard tool does not lose it.
+fn report_generated(line: &str) {
+    println!("{line}");
+    match copy_to_clipboard(line) {
+        Ok(tool) => println!("Copied to the clipboard with {tool}."),
+        Err(e) => println!("Could not reach a clipboard ({e}); the line is printed above."),
+    }
+}
+
+/// Put `text` on the system clipboard, trying the usual Wayland, X11 and macOS tools.
+fn copy_to_clipboard(text: &str) -> Result<&'static str, String> {
+    const TOOLS: [(&str, &[&str]); 4] = [
+        ("wl-copy", &[]),
+        ("xclip", &["-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--input"]),
+        ("pbcopy", &[]),
+    ];
+    let mut last = "no clipboard tool found".to_string();
+    for (tool, args) in TOOLS {
+        match write_to_tool(tool, args, text) {
+            Ok(()) => return Ok(tool),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+/// Run one clipboard tool with `text` on its stdin.
+fn write_to_tool(tool: &str, args: &[&str], text: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(tool)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("{tool}: {e}"))?;
+    {
+        let Some(stdin) = child.stdin.as_mut() else {
+            return Err(format!("{tool}: no stdin"));
+        };
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| format!("{tool}: {e}"))?;
+    }
+    let _ = child.stdin.take();
+    let status = child.wait().map_err(|e| format!("{tool}: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{tool} exited with {status}"))
+    }
+}
+
+/// Quote a value for the generated line when the shell would split it.
+fn shell_quote(value: &str) -> String {
+    let plain = !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-/:+=,@%".contains(c));
+    if plain {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', r"'\''"))
+    }
 }
 
 #[cfg(test)]
@@ -1235,6 +1598,7 @@ mod tests {
         editor.mode = Mode::EditText(TextEdit {
             key: "logging_level".to_string(),
             entry: None,
+            adding: false,
             buffer: "nope".to_string(),
             cursor: 4,
         });
@@ -1277,6 +1641,7 @@ mod tests {
         editor.mode = Mode::EditText(TextEdit {
             key: "instances".to_string(),
             entry: None,
+            adding: false,
             buffer: "-2".to_string(),
             cursor: 2,
         });
@@ -1431,5 +1796,258 @@ mod tests {
 
         editor.monitors.clear();
         assert_eq!(editor.monitor_summary(), "No monitors detected");
+    }
+
+    /// A generator over the default config, ready to toggle rows on.
+    fn generator(name: &str) -> Editor {
+        let dir = std::env::temp_dir().join(format!("game_tui_gen_{name}_{}", std::process::id()));
+        Editor::new_generator(
+            dir.join("config.toml"),
+            config_file::default_document(),
+            Vec::new(),
+            None,
+            false,
+        )
+    }
+
+    /// Type into the open text editor and commit it.
+    fn type_and_commit(editor: &mut Editor, text: &str) {
+        if let Mode::EditText(edit) = &mut editor.mode {
+            edit.buffer = text.to_string();
+            edit.cursor = text.chars().count();
+        }
+        editor.handle_edit_text(KeyEvent::from(KeyCode::Enter));
+    }
+
+    #[test]
+    fn adding_a_list_entry_stays_in_the_list() {
+        let dir = std::env::temp_dir().join(format!("game_tui_list_{}", std::process::id()));
+        let mut editor = Editor::new(
+            dir.join("config.toml"),
+            config_file::default_document(),
+            Vec::new(),
+            None,
+            false,
+        );
+        editor.select_key("mods");
+        editor.mode = Mode::EditList;
+
+        editor.handle_edit_list(KeyEvent::from(KeyCode::Char('a')));
+        assert!(matches!(editor.mode, Mode::EditText(_)), "the prompt opens");
+        type_and_commit(&mut editor, "./mod.sh");
+
+        assert!(matches!(editor.mode, Mode::EditList), "still in the list");
+        assert_eq!(editor.get_list("mods"), vec!["./mod.sh".to_string()]);
+        assert_eq!(editor.list_selection, 0, "the new entry is selected");
+    }
+
+    #[test]
+    fn cancelling_a_new_list_entry_adds_nothing() {
+        let dir = std::env::temp_dir().join(format!("game_tui_cancel_{}", std::process::id()));
+        let mut editor = Editor::new(
+            dir.join("config.toml"),
+            config_file::default_document(),
+            Vec::new(),
+            None,
+            false,
+        );
+        editor.select_key("mods");
+        editor.mode = Mode::EditList;
+
+        // Committing nothing is refused, and the list keeps its shape.
+        editor.handle_edit_list(KeyEvent::from(KeyCode::Char('a')));
+        type_and_commit(&mut editor, "   ");
+        assert!(matches!(editor.mode, Mode::EditList));
+        assert!(editor.get_list("mods").is_empty());
+        assert!(editor.status.contains("empty entry not added"));
+
+        // Escaping a typed entry leaves nothing behind either.
+        editor.handle_edit_list(KeyEvent::from(KeyCode::Char('a')));
+        if let Mode::EditText(edit) = &mut editor.mode {
+            edit.buffer = "./mod.sh".to_string();
+            edit.cursor = 8;
+        }
+        editor.handle_edit_text(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(editor.mode, Mode::EditList), "still in the list");
+        assert!(editor.get_list("mods").is_empty());
+        assert!(!editor.dirty, "cancelling does not dirty the document");
+    }
+
+    #[test]
+    fn editing_an_existing_list_entry_returns_to_the_list() {
+        let dir = std::env::temp_dir().join(format!("game_tui_edit_{}", std::process::id()));
+        let mut doc = config_file::default_document();
+        let mut array = Array::new();
+        array.push("a");
+        array.push("b");
+        doc["mods"] = Item::Value(Value::Array(array));
+
+        let mut editor = Editor::new(dir.join("config.toml"), doc, Vec::new(), None, false);
+        editor.select_key("mods");
+        editor.mode = Mode::EditList;
+        editor.list_selection = 1;
+
+        editor.handle_edit_list(KeyEvent::from(KeyCode::Enter));
+        type_and_commit(&mut editor, "c");
+
+        assert!(matches!(editor.mode, Mode::EditList), "still in the list");
+        assert_eq!(
+            editor.get_list("mods"),
+            vec!["a".to_string(), "c".to_string()]
+        );
+        assert_eq!(editor.list_selection, 1, "the edited entry stays selected");
+    }
+
+    #[test]
+    fn ctrl_c_leaves_without_saving() {
+        let dir = std::env::temp_dir().join(format!("game_tui_ctrlc_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+        let mut editor = Editor::new(
+            path.clone(),
+            config_file::default_document(),
+            Vec::new(),
+            None,
+            false,
+        );
+        editor.select_key("mangohud");
+        editor.activate();
+        assert!(editor.dirty);
+        assert!(editor.handle_key(ctrl_c).unwrap(), "ctrl+c exits at once");
+        assert!(!path.exists(), "nothing was written");
+
+        // It works while typing too, which is where the usual Ctrl+C reflex lands.
+        editor.select_key("instances");
+        editor.activate();
+        assert!(matches!(editor.mode, Mode::EditText(_)));
+        assert!(editor.handle_key(ctrl_c).unwrap());
+        assert!(editor.cancelled);
+        assert!(!path.exists(), "still nothing written");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generator_starts_with_a_bare_line() {
+        let editor = generator("bare");
+        assert_eq!(editor.generated_line(), "game -- %command%");
+        assert!(editor.launch_flags().0.is_empty());
+    }
+
+    #[test]
+    fn generator_emits_only_the_flags_that_changed() {
+        let mut editor = generator("flags");
+
+        editor.select_key("gamemode");
+        editor.activate();
+        assert_eq!(editor.generated_line(), "game -g -- %command%");
+
+        editor.select_key("gamescope");
+        editor.activate();
+        assert_eq!(editor.generated_line(), "game -g -s -- %command%");
+
+        editor.select_key("logging_level");
+        editor.cycle_choice(1);
+        assert_eq!(editor.generated_line(), "game -g -s -l 1 -- %command%");
+
+        // Back to the config value: the flag disappears again.
+        editor.select_key("gamescope");
+        editor.activate();
+        assert_eq!(editor.generated_line(), "game -g -l 1 -- %command%");
+    }
+
+    #[test]
+    fn generator_reports_changes_that_need_the_config() {
+        let dir = std::env::temp_dir().join(format!("game_tui_gennote_{}", std::process::id()));
+        let mut doc = config_file::default_document();
+        doc["mangohud"] = Item::Value(Value::from(false));
+        let mut editor =
+            Editor::new_generator(dir.join("config.toml"), doc, Vec::new(), None, false);
+
+        // Turning MangoHud back on cannot be done with a flag, only with the config.
+        editor.select_key("mangohud");
+        editor.activate();
+        let (flags, notes) = editor.launch_flags();
+        assert!(flags.is_empty());
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("use -C"), "{}", notes[0]);
+    }
+
+    #[test]
+    fn generator_adds_exports_and_dll_overrides() {
+        let mut editor = generator("lists");
+        editor.select_key("exports");
+        editor.mode = Mode::EditList;
+        editor.handle_edit_list(KeyEvent::from(KeyCode::Char('a')));
+        type_and_commit(&mut editor, "PROTON_NO_ESYNC=1");
+        assert_eq!(
+            editor.generated_line(),
+            "game PROTON_NO_ESYNC=1 -- %command%"
+        );
+
+        editor.select_key("dll_overrides");
+        editor.mode = Mode::EditList;
+        editor.handle_edit_list(KeyEvent::from(KeyCode::Char('a')));
+        type_and_commit(&mut editor, "dinput8=n,b");
+        assert!(
+            editor.generated_line().contains("-d dinput8=n,b"),
+            "{}",
+            editor.generated_line()
+        );
+
+        // Values the shell would split are quoted.
+        editor.select_key("mods");
+        editor.mode = Mode::EditList;
+        editor.handle_edit_list(KeyEvent::from(KeyCode::Char('a')));
+        type_and_commit(&mut editor, "./my mod.sh --flag");
+        assert!(
+            editor.generated_line().contains("-u './my mod.sh --flag'"),
+            "{}",
+            editor.generated_line()
+        );
+    }
+
+    #[test]
+    fn generator_can_name_the_binary_by_path() {
+        let mut editor = generator("path");
+        editor.binary = "/usr/local/bin/game".to_string();
+
+        editor
+            .handle_form(KeyEvent::from(KeyCode::Char('p')))
+            .unwrap();
+        assert_eq!(editor.generated_line(), "/usr/local/bin/game -- %command%");
+        assert!(editor.status.contains("/usr/local/bin/game"));
+
+        editor
+            .handle_form(KeyEvent::from(KeyCode::Char('p')))
+            .unwrap();
+        assert_eq!(editor.generated_line(), "game -- %command%");
+    }
+
+    #[test]
+    fn generator_quits_without_the_dirty_prompt() {
+        let mut editor = generator("quit");
+        editor.select_key("gamescope");
+        editor.activate();
+        assert!(editor.dirty);
+
+        assert!(editor
+            .handle_form(KeyEvent::from(KeyCode::Char('q')))
+            .unwrap());
+        assert!(!editor.confirm_quit, "the generator has nothing to save");
+    }
+
+    #[test]
+    fn ctrl_c_leaves_the_generator_without_a_line() {
+        let mut editor = generator("cancel");
+        editor.select_key("gamescope");
+        editor.activate();
+
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(editor.handle_key(ctrl_c).unwrap());
+        assert!(editor.cancelled, "nothing is copied on the way out");
     }
 }

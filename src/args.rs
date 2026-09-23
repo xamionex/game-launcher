@@ -68,6 +68,7 @@ fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
         'F' => app.fix_audit = true,
         'v' => app.hypervisor = true,
         'E' => app.eos_proxy = true,
+        'k' => app.generator_tui = true,
         'C' => app.config_tui = true,
         _ => return Err(ParseError::Usage),
     }
@@ -213,6 +214,7 @@ pub fn print_help(prog: &str) {
     eprintln!();
     eprintln!("== Actions ==");
     eprintln!("  -C            Open the interactive config editor (~/.config/game-launcher/config.toml) and exit");
+    eprintln!("  -k            Open the launch options generator: change options, then copy the resulting Steam launch options line and exit");
     eprintln!();
     eprintln!("== Flags that accept values or lists ==");
     eprintln!("  -l LEVEL      Set logging level (-1: silent, 0: normal, 1: verbose)");
@@ -422,12 +424,28 @@ mod tests {
     }
 
     #[test]
-    fn speedhack_flag_removed() {
-        // `-k` used to disable speedhack; the layer is removed entirely now, so the flag is unknown and requests usage.
+    fn unknown_flag_requests_usage() {
         let mut app = App::default();
         assert!(matches!(
-            parse_flags(&mut app, &v(&["-k", "--", "x"])),
+            parse_flags(&mut app, &v(&["-Z", "--", "x"])),
             Err(ParseError::Usage)
         ));
+    }
+
+    #[test]
+    fn generator_flag() {
+        let mut app = App::default();
+        assert!(!app.generator_tui);
+        parse_flags(&mut app, &v(&["-k"])).unwrap();
+        assert!(app.generator_tui);
+        assert!(!app.config_tui);
+    }
+
+    #[test]
+    fn generator_flag_ignores_a_following_command() {
+        let mut app = App::default();
+        parse_flags(&mut app, &v(&["-k", "--", "/bin/game"])).unwrap();
+        assert!(app.generator_tui);
+        assert_eq!(app.original_cmd, v(&["/bin/game"]));
     }
 }

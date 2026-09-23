@@ -87,6 +87,9 @@ pub struct App {
     /// Open the interactive config editor and exit (the `-C` flag).
     /// Not a config file setting; it is a command-line action.
     pub config_tui: bool,
+    /// Open the launch options generator and exit (the `-k` flag).
+    /// Not a config file setting; it is a command-line action.
+    pub generator_tui: bool,
 
     // === Valued flags ===
     pub logging_level: i32,
@@ -144,6 +147,7 @@ impl Default for App {
             eos_proxy: false,
 
             config_tui: false,
+            generator_tui: false,
 
             logging_level: 0,
             instances: 1,
