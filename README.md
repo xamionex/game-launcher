@@ -48,6 +48,14 @@ curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install
 Installs `game` to `~/.local/bin/game`. Make sure `~/.local/bin` is on your `PATH`. \
 Gaming mode may not find it, prefer the root install.
 
+An installed copy updates itself with `game -U`. \
+It reports the version it is running, compares it with the newest release, and then runs this same installer for the copy that is running: \
+the root install when it started from `/usr/local/bin`, the user install when it started from `~/.local/bin`, and otherwise whichever of the two is installed (the root install, the README's preferred way, when neither is). \
+A build that is newer than the newest release is left alone, so a development build is not downgraded.
+
+When both `/usr/local/bin/game` and `~/.local/bin/game` exist, the installer reports the other copy and asks whether to remove it, since `PATH` order decides which one runs. \
+Answer n to keep it, and make sure the directory of the install you want comes first in `PATH`.
+
 The dxvk config always goes to the invoking user's `~/.config/dxvk/dxvk.conf`, even for root installs.
 
 ## Manual Install
@@ -170,6 +178,7 @@ Actions:
 | ---- | ------ |
 | `-C` | Open the interactive config editor (`~/.config/game-launcher/config.toml`) and exit, ignoring any game command |
 | `-k` | Open the launch options generator, copy the resulting Steam launch options line to the clipboard and exit, ignoring any game command |
+| `-U` | Update the installed launcher to the newest release and exit, ignoring any game command |
 
 ### Missing wrapper tools
 

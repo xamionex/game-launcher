@@ -90,6 +90,9 @@ pub struct App {
     /// Open the launch options generator and exit (the `-k` flag).
     /// Not a config file setting; it is a command-line action.
     pub generator_tui: bool,
+    /// Update the installed launcher to the newest release and exit (the `-U` flag).
+    /// Not a config file setting; it is a command-line action.
+    pub update_self: bool,
 
     // === Valued flags ===
     pub logging_level: i32,
@@ -148,6 +151,7 @@ impl Default for App {
 
             config_tui: false,
             generator_tui: false,
+            update_self: false,
 
             logging_level: 0,
             instances: 1,

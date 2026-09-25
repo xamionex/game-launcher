@@ -62,6 +62,51 @@ fix_owner() {
     done
 }
 
+# Ask a yes/no question on the terminal.
+# The script is usually piped from curl, so stdin is the script itself and cannot be read: the question goes to /dev/tty.
+ask_remove() {
+    printf 'Remove %s? [y/N] ' "$1" >/dev/tty
+    answer=""
+    read -r answer </dev/tty || true
+    case "$answer" in
+        [Yy]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# The same binary installed in the other location can shadow this one, depending on PATH order.
+# Reports it, then asks whether to remove it. Never fatal: the install itself has already succeeded.
+check_conflicting_install() {
+    if [ "$MODE" = "root" ]; then
+        conflict="$TARGET_HOME/.local/bin/$BIN_NAME"
+    else
+        conflict="/usr/local/bin/$BIN_NAME"
+    fi
+    [ -e "$conflict" ] || return 0
+
+    warn "another $BIN_NAME is installed at $conflict (this install is $BIN_DIR/$BIN_NAME)"
+    # A readability test on /dev/tty passes in processes without a controlling terminal, so try to open it.
+    if ! (exec 3</dev/tty) 2>/dev/null; then
+        info "no terminal to ask on; remove the other copy if you want only one install"
+        return 0
+    fi
+    if ! ask_remove "$conflict"; then
+        info "keeping $conflict; make sure $BIN_DIR comes first in PATH"
+        return 0
+    fi
+    if [ "$MODE" = "root" ]; then
+        if rm -f "$conflict"; then
+            info "removed $conflict"
+        else
+            warn "could not remove $conflict"
+        fi
+    elif command -v sudo >/dev/null 2>&1 && sudo rm -f "$conflict"; then
+        info "removed $conflict"
+    else
+        warn "could not remove $conflict; run: sudo rm -f $conflict"
+    fi
+}
+
 MODE="root"
 if [ "${1:-}" = "--user" ]; then
     MODE="user"
@@ -72,7 +117,7 @@ elif [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     cat <<EOF
 Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh [-- --user]
 
-Installs the game-launcher binary, the dxvk config and refreshes the payload cache (EOS-Proxy dll and netsock fix.so).
+Installs the game-launcher binary, the dxvk config and refreshes the payload cache (EOS-Proxy dll, netsock and linuwux loaders).
 
 Root install (default, preferred):
   binary at /usr/local/bin/$BIN_NAME, works in Steam Deck gaming mode without specifying the full path.
@@ -81,6 +126,7 @@ Root install (default, preferred):
 User install (--user):
   binary at ~/.local/bin/$BIN_NAME.
 
+An existing copy in the other location is reported, and removed when you confirm, so PATH order cannot pick a stale one.
 The dxvk config always goes to ~/.config/dxvk/dxvk.conf for the invoking user.
 Payloads go to the invoking user's config directory.
 EOF
@@ -137,6 +183,8 @@ chmod 755 "$TMP_DIR/$BIN_NAME"
 info "installing binary to $BIN_DIR/$BIN_NAME"
 mkdir -p "$BIN_DIR"
 install -m 755 "$TMP_DIR/$BIN_NAME" "$BIN_DIR/$BIN_NAME"
+
+check_conflicting_install
 
 info "installing dxvk config to $DXVK_DIR/dxvk.conf"
 mkdir -p "$DXVK_DIR"

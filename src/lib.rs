@@ -10,6 +10,7 @@ pub mod logging;
 pub mod payload;
 pub mod ramdisk;
 pub mod tui;
+pub mod update;
 pub mod wrappers;
 
 use config::App;
@@ -65,6 +66,17 @@ pub fn run() -> i32 {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("Launch options generator: {e}");
+                1
+            }
+        };
+    }
+
+    // `-U` is an action too: update the install that is running, then exit.
+    if app.update_self {
+        return match update::run() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Update: {e}");
                 1
             }
         };

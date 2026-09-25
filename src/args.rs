@@ -69,6 +69,7 @@ fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
         'v' => app.hypervisor = true,
         'E' => app.eos_proxy = true,
         'k' => app.generator_tui = true,
+        'U' => app.update_self = true,
         'C' => app.config_tui = true,
         _ => return Err(ParseError::Usage),
     }
@@ -215,6 +216,7 @@ pub fn print_help(prog: &str) {
     eprintln!("== Actions ==");
     eprintln!("  -C            Open the interactive config editor (~/.config/game-launcher/config.toml) and exit");
     eprintln!("  -k            Open the launch options generator: change options, then copy the resulting Steam launch options line and exit");
+    eprintln!("  -U            Update the installed game to the newest release (runs the installer from the README) and exit");
     eprintln!();
     eprintln!("== Flags that accept values or lists ==");
     eprintln!("  -l LEVEL      Set logging level (-1: silent, 0: normal, 1: verbose)");
@@ -430,6 +432,26 @@ mod tests {
             parse_flags(&mut app, &v(&["-Z", "--", "x"])),
             Err(ParseError::Usage)
         ));
+    }
+
+    #[test]
+    fn update_flag() {
+        let mut app = App::default();
+        assert!(!app.update_self);
+        parse_flags(&mut app, &v(&["-U"])).unwrap();
+        assert!(app.update_self);
+        assert!(
+            !app.config_tui && !app.generator_tui,
+            "-U is its own action"
+        );
+    }
+
+    #[test]
+    fn update_flag_ignores_a_following_command() {
+        let mut app = App::default();
+        parse_flags(&mut app, &v(&["-U", "--", "/bin/game"])).unwrap();
+        assert!(app.update_self);
+        assert_eq!(app.original_cmd, v(&["/bin/game"]));
     }
 
     #[test]
