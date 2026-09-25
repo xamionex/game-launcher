@@ -10,8 +10,16 @@ use crate::config::{App, EMPTY_MARKER};
 use crate::payload;
 
 /// Upstream release asset for the netsock patch (`fix.so`); fetched into the payload cache on first use and falling back to the embedded copy.
-const NETSNOCK_URL: &str =
+pub(crate) const NETSNOCK_URL: &str =
     "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so";
+/// Name of the netsock loader in the payload cache and in the repository.
+pub(crate) const NETSOCK_NAME: &str = "netsock.so";
+
+/// Upstream release asset for the hypervisor loader (`LinUwUx.so`); fetched into the payload cache on first use and falling back to the embedded copy.
+pub(crate) const LINUWUX_URL: &str =
+    "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so";
+/// Name of the hypervisor loader in the payload cache and in the repository.
+pub(crate) const LINUWUX_NAME: &str = "liblinuwux.so";
 
 /// Return the `lspci -vnn` lines describing display adapters, or an empty string if `lspci` is unavailable.
 fn gpu_info() -> String {
@@ -458,6 +466,7 @@ fn command_exists(program: &str) -> bool {
 ///
 /// LinuwUx must run before MangoHud/Gamescope/etc. — when it ends up inside another wrapper (e.g. `mangohud linuwux ...`) the game frequently fails to start.
 /// Wrapping the whole chain in `env LD_PRELOAD=...` keeps it at the front while still handing the loader to the game and its helper processes.
+/// The loader is taken from the payload cache when available (downloaded once from the upstream release, see [`crate::payload`]) and from the copy embedded in the binary otherwise.
 fn wrap_linuwux(app: &App, cmd: Vec<String>) -> Vec<String> {
     if !app.hypervisor {
         return cmd;
@@ -471,7 +480,14 @@ fn wrap_linuwux(app: &App, cmd: Vec<String>) -> Vec<String> {
             "Extracting hypervisor loader to {}",
             path.display()
         ));
-        extract_so(app, include_bytes!("../liblinuwux.so"), &path);
+        if let Some(bytes) = payload::load(
+            app,
+            LINUWUX_NAME,
+            LINUWUX_URL,
+            include_bytes!("../liblinuwux.so"),
+        ) {
+            extract_so(app, &bytes, &path);
+        }
     }
     if !path.is_file() {
         return cmd;
@@ -789,7 +805,7 @@ pub fn apply_environment_modifications(app: &App) {
                 app.log(&format!("Extracting netsock loader to {}", path.display()));
                 if let Some(bytes) = payload::load(
                     app,
-                    "netsock.so",
+                    NETSOCK_NAME,
                     NETSNOCK_URL,
                     include_bytes!("../netsock.so"),
                 ) {

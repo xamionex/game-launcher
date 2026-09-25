@@ -171,6 +171,8 @@ if mkdir -p "$PAYLOAD_DIR"; then
         "EOSSDK-Win64-Shipping.dll"
     fetch_payload "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so" \
         "netsock.so"
+    fetch_payload "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so" \
+        "liblinuwux.so"
 else
     warn "could not create $PAYLOAD_DIR, skipping payload refresh"
 fi

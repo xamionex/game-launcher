@@ -10,10 +10,10 @@ use crate::config::App;
 use crate::payload;
 
 /// Upstream release asset; fetched into the payload cache on first use.
-const DLL_URL: &str =
+pub(crate) const DLL_URL: &str =
     "https://github.com/yesyes0649/eos-proxy/releases/latest/download/EOSSDK-Win64-Shipping.dll";
 /// The dll shipped with games that use EOS, and the name the proxy must have.
-const DLL_NAME: &str = "EOSSDK-Win64-Shipping.dll";
+pub(crate) const DLL_NAME: &str = "EOSSDK-Win64-Shipping.dll";
 /// Backup name the original dll is renamed to; its presence means already applied.
 const BACKUP_NAME: &str = "EOSSDK-Win64-Shipping.yes";
 /// Copy embedded in the binary, used when the download fails.

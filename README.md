@@ -234,18 +234,26 @@ The line is always printed to the terminal as well, so a machine without a clipb
 
 ## Payloads
 
-Two payloads are fetched from their upstream releases and cached in
+Three payloads are fetched from their upstream releases and cached in
 `~/.config/game-launcher/payloads/`:
 
 | File | Source | Used by |
 | ---- | ------ | ------- |
 | `EOSSDK-Win64-Shipping.dll` | [eos-proxy](https://github.com/yesyes0649/eos-proxy) releases | `-E` |
 | `netsock.so` | [steamnetsock-patch](https://github.com/yesyes0649/steamnetsock-patch) releases (`fix.so`) | `-F` |
+| `liblinuwux.so` | [linuwux-runtime](https://github.com/brcly/linuwux-runtime) releases (`LinUwUx.so`) | `-v` |
 
 Each payload is downloaded once. \
 If the download fails (offline, GitHub unreachable, curl missing) the copy embedded in the binary is used instead, and a failed download is not cached, so a later launch can still pick up the latest release. \
 Delete the cached file to force a refresh. \
-The [installer](#automatic-install) also refreshes both payloads on every install or reinstall.
+The [installer](#automatic-install) also refreshes all three payloads on every install or reinstall.
+
+The copies embedded in the binary are kept current by the test suite.
+`cargo test` fetches every upstream release and compares it with the file in the repository: an outdated copy is replaced with the upstream one and the test fails, so the update gets committed and the next build embeds it.
+When GitHub or curl cannot be reached the payloads it could not check are reported (run `cargo test -- --nocapture` to see them) and the test passes, so an offline test run still works.
+
+The loaders are only written to their target path (`liblinuwux.so` to `~/.local/lib`, `netsock.so` to `~/.config/SLSsteam/tools/netsock`) when that file is missing, so an already extracted loader is left alone.
+Delete it to let the next launch extract the cached, up to date copy.
 
 ## EOS-Proxy (`-E`)
 
