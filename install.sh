@@ -19,6 +19,7 @@
 #
 # The dxvk config always goes to the invoking user's ~/.config/dxvk/dxvk.conf, even for root installs.
 # Payloads go to the invoking user's config directory (honoring XDG_CONFIG_HOME), and a failed payload fetch is only a warning: the binary embeds fallback copies.
+# LinUwUx goes to ~/.local/share/linuwux/LinUwUx.so; a previous ~/.local/lib/liblinuwux.so is removed.
 set -eu
 
 REPO="xamionex/game-launcher"
@@ -129,6 +130,7 @@ User install (--user):
 An existing copy in the other location is reported, and removed when you confirm, so PATH order cannot pick a stale one.
 The dxvk config always goes to ~/.config/dxvk/dxvk.conf for the invoking user.
 Payloads go to the invoking user's config directory.
+LinUwUx goes to ~/.local/share/linuwux/LinUwUx.so.
 EOF
     exit 0
 elif [ -n "${1:-}" ]; then
@@ -157,6 +159,9 @@ DXVK_DIR="$TARGET_HOME/.config/dxvk"
 # The launcher resolves its config directory through XDG_CONFIG_HOME, so the payload cache has to follow the same rule.
 CONFIG_HOME="${XDG_CONFIG_HOME:-$TARGET_HOME/.config}"
 PAYLOAD_DIR="$CONFIG_HOME/game-launcher/payloads"
+# LinUwUx has its own home; older installers dropped it into ~/.local/lib.
+LINUWUX_DIR="$TARGET_HOME/.local/share/linuwux"
+OLD_LINUWUX="$TARGET_HOME/.local/lib/liblinuwux.so"
 
 command -v curl >/dev/null 2>&1 || die "curl is required but not installed"
 command -v mktemp >/dev/null 2>&1 || die "mktemp is required but not installed"
@@ -217,9 +222,35 @@ if mkdir -p "$PAYLOAD_DIR"; then
     chown -R "$TARGET_USER" "$(dirname "$PAYLOAD_DIR")" 2>/dev/null || true
     fetch_payload "https://github.com/yesyes0649/eos-proxy/releases/latest/download/EOSSDK-Win64-Shipping.dll" "EOSSDK-Win64-Shipping.dll"
     fetch_payload "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so" "netsock.so"
-    fetch_payload "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so" "LinUwUx.so"
 else
     warn "could not create $PAYLOAD_DIR, skipping payload refresh"
+fi
+
+# LinUwUx lives under ~/.local/share/linuwux, not in the payload cache.
+info "refreshing linuwux in $LINUWUX_DIR"
+
+if mkdir -p "$LINUWUX_DIR"; then
+    fix_owner "$LINUWUX_DIR"
+    if curl -fsSL --connect-timeout 10 --max-time 300 -o "$LINUWUX_DIR/LinUwUx.so.part" \
+        "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so" \
+        && mv "$LINUWUX_DIR/LinUwUx.so.part" "$LINUWUX_DIR/LinUwUx.so"; then
+        chown "$TARGET_USER" "$LINUWUX_DIR/LinUwUx.so" 2>/dev/null || true
+        info "linuwux updated"
+    else
+        rm -f "$LINUWUX_DIR/LinUwUx.so.part"
+        warn "could not fetch LinUwUx.so, the launcher will use its bundled copy"
+    fi
+
+    # Older installers placed linuwux at ~/.local/lib/liblinuwux.so; drop it now that the new path is in use.
+    if [ -e "$OLD_LINUWUX" ] || [ -L "$OLD_LINUWUX" ]; then
+        if rm -f "$OLD_LINUWUX"; then
+            info "removed previous linuwux at $OLD_LINUWUX"
+        else
+            warn "could not remove $OLD_LINUWUX"
+        fi
+    fi
+else
+    warn "could not create $LINUWUX_DIR, skipping linuwux refresh"
 fi
 
 info "done"
