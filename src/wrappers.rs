@@ -10,16 +10,14 @@ use crate::config::{App, EMPTY_MARKER};
 use crate::payload;
 
 /// Upstream release asset for the netsock patch (`fix.so`); fetched into the payload cache on first use and falling back to the embedded copy.
-pub(crate) const NETSNOCK_URL: &str =
-    "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so";
+pub(crate) const NETSNOCK_URL: &str = "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so";
 /// Name of the netsock loader in the payload cache and in the repository.
 pub(crate) const NETSOCK_NAME: &str = "netsock.so";
 
 /// Upstream release asset for the hypervisor loader (`LinUwUx.so`); fetched into the payload cache on first use and falling back to the embedded copy.
-pub(crate) const LINUWUX_URL: &str =
-    "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so";
+pub(crate) const LINUWUX_URL: &str = "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so";
 /// Name of the hypervisor loader in the payload cache and in the repository.
-pub(crate) const LINUWUX_NAME: &str = "liblinuwux.so";
+pub(crate) const LINUWUX_NAME: &str = "LinUwUx.so";
 
 /// Return the `lspci -vnn` lines describing display adapters, or an empty string if `lspci` is unavailable.
 fn gpu_info() -> String {
@@ -484,7 +482,7 @@ fn wrap_linuwux(app: &App, cmd: Vec<String>) -> Vec<String> {
             app,
             LINUWUX_NAME,
             LINUWUX_URL,
-            include_bytes!("../liblinuwux.so"),
+            include_bytes!("../LinUwUx.so"),
         ) {
             extract_so(app, &bytes, &path);
         }
@@ -777,10 +775,10 @@ fn netsock_path() -> Option<PathBuf> {
         .ok()
 }
 
-/// Target path for the hypervisor loader: `$HOME/.local/lib/liblinuwux.so`.
+/// Target path for the hypervisor loader: `$HOME/.local/share/linuwux/LinUwUx.so`.
 fn hypervisor_path() -> Option<PathBuf> {
     std::env::var("HOME")
-        .map(|h| Path::new(&h).join(".local/lib/liblinuwux.so"))
+        .map(|h| Path::new(&h).join(".local/share/linuwux/LinUwUx.so"))
         .ok()
 }
 

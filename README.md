@@ -77,8 +77,8 @@ symlink for dxvk as well:
 ln -s $PWD/dxvk ~/.config/dxvk
 ```
 
-netsock and the hypervisor loader (liblinuwux.so) are embedded in the binary and self-extract on first use, no setup needed. \
-netsock goes to `$HOME/.config/SLSsteam/tools/netsock/` and the hypervisor to `$HOME/.local/lib/`. \
+netsock and the hypervisor loader (LinUwUx.so) are embedded in the binary and self-extract on first use, no setup needed. \
+netsock goes to `$HOME/.config/SLSsteam/tools/netsock/` and the hypervisor to `$HOME/.local/share/linuwux/`. \
 Both are also fetched from their upstream releases into `~/.config/game-launcher/payloads/`, see [Payloads](#payloads).
 
 Hypervisor setup and usage guide: https://cs.rin.ru/forum/viewtopic.php?f=20&t=160056 \
@@ -155,7 +155,7 @@ Disabled by default (use the flag to enable):
 | `-m` | Enable modding support (WINEDLLOVERRIDES="dwmapi=n,b;winhttp=n,b;winmm=n,b;version=n,b") |
 | `-F` | Enable LD_AUDIT with `$HOME/.config/SLSsteam/tools/netsock/netsock.so` (installed from the payload cache if missing, merges with user-set LD_AUDIT) |
 | `-V` | Enable custom vkd3d-proton loading |
-| `-v` | Enable hypervisor loader: `LD_PRELOAD=$HOME/.local/lib/liblinuwux.so` and `PROTON_DISABLE_LSTEAMCLIENT=0` (self-extracts if missing) |
+| `-v` | Enable hypervisor loader: `LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so` and `PROTON_DISABLE_LSTEAMCLIENT=0` (self-extracts if missing) |
 | `-E` | Enable EOS-Proxy: replaces the game's `EOSSDK-Win64-Shipping.dll` with the proxy, skipped when the game is already patched |
 
 Valued flags:
@@ -250,7 +250,7 @@ Three payloads are fetched from their upstream releases and cached in
 | ---- | ------ | ------- |
 | `EOSSDK-Win64-Shipping.dll` | [eos-proxy](https://github.com/yesyes0649/eos-proxy) releases | `-E` |
 | `netsock.so` | [steamnetsock-patch](https://github.com/yesyes0649/steamnetsock-patch) releases (`fix.so`) | `-F` |
-| `liblinuwux.so` | [linuwux-runtime](https://github.com/brcly/linuwux-runtime) releases (`LinUwUx.so`) | `-v` |
+| `LinUwUx.so` | [linuwux-runtime](https://github.com/brcly/linuwux-runtime) releases (`LinUwUx.so`) | `-v` |
 
 Each payload is downloaded once. \
 If the download fails (offline, GitHub unreachable, curl missing) the copy embedded in the binary is used instead, and a failed download is not cached, so a later launch can still pick up the latest release. \
@@ -261,7 +261,7 @@ The copies embedded in the binary are kept current by the test suite.
 `cargo test` fetches every upstream release and compares it with the file in the repository: an outdated copy is replaced with the upstream one and the test fails, so the update gets committed and the next build embeds it.
 When GitHub or curl cannot be reached the payloads it could not check are reported (run `cargo test -- --nocapture` to see them) and the test passes, so an offline test run still works.
 
-The loaders are only written to their target path (`liblinuwux.so` to `~/.local/lib`, `netsock.so` to `~/.config/SLSsteam/tools/netsock`) when that file is missing, so an already extracted loader is left alone.
+The loaders are only written to their target path (`LinUwUx.so` to `~/.local/share/linuwux`, `netsock.so` to `~/.config/SLSsteam/tools/netsock`) when that file is missing, so an already extracted loader is left alone.
 Delete it to let the next launch extract the cached, up to date copy.
 
 ## EOS-Proxy (`-E`)

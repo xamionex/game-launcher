@@ -209,7 +209,7 @@ pub fn print_help(prog: &str) {
         "  -F            Enable LD_AUDIT with $HOME/.config/SLSsteam/tools/netsock/netsock.so"
     );
     eprintln!("  -V            Enable custom vkd3d-proton loading (~/Projects/vkd3d-proton/build/vkd3d-proton-master)");
-    eprintln!("  -v            Enable hypervisor loader (LD_PRELOAD=$HOME/.local/lib/liblinuwux.so, sets PROTON_DISABLE_LSTEAMCLIENT=0)");
+    eprintln!("  -v            Enable hypervisor loader (LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so, sets PROTON_DISABLE_LSTEAMCLIENT=0)");
     eprintln!("                Might require you to disable mangohud with -h");
     eprintln!("  -E            Enable EOS-Proxy (replaces the game's EOSSDK-Win64-Shipping.dll, skips games already patched)");
     eprintln!();

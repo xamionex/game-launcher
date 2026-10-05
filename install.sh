@@ -215,12 +215,9 @@ if mkdir -p "$PAYLOAD_DIR"; then
     fix_owner "$PAYLOAD_DIR"
     # Also fix files inside (payloads and config written by an older installer).
     chown -R "$TARGET_USER" "$(dirname "$PAYLOAD_DIR")" 2>/dev/null || true
-    fetch_payload "https://github.com/yesyes0649/eos-proxy/releases/latest/download/EOSSDK-Win64-Shipping.dll" \
-        "EOSSDK-Win64-Shipping.dll"
-    fetch_payload "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so" \
-        "netsock.so"
-    fetch_payload "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so" \
-        "liblinuwux.so"
+    fetch_payload "https://github.com/yesyes0649/eos-proxy/releases/latest/download/EOSSDK-Win64-Shipping.dll" "EOSSDK-Win64-Shipping.dll"
+    fetch_payload "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so" "netsock.so"
+    fetch_payload "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so" "LinUwUx.so"
 else
     warn "could not create $PAYLOAD_DIR, skipping payload refresh"
 fi
