@@ -14,10 +14,10 @@ fn space_path_passed_as_single_argument() {
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).unwrap();
 
-    // Wrappers disabled (-g -h), silent mode (-l -1) so the command is run directly.
+    // Wrappers disabled (-g -H), silent mode (-l -1) so the command is run directly.
     // `printf '%s\n'` prints each argument on its own line, so a split argument would yield multiple lines.
     let output = Command::new(bin)
-        .args(["-g", "-h", "-l", "-1", "--", "printf", "%s\\n", space_arg])
+        .args(["-g", "-H", "-l", "-1", "--", "printf", "%s\\n", space_arg])
         .env("HOME", std::env::temp_dir())
         .env("XDG_CONFIG_HOME", &scratch)
         .output()

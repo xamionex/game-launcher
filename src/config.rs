@@ -60,7 +60,7 @@ pub struct App {
     // === Toggles enabled by default (can be disabled) ===
     pub gamemode: bool,
     pub mangohud: bool,
-    /// Force MangoHud on even in gaming mode (`-H`).
+    /// Force MangoHud on in gaming mode, where it is skipped by default (the `-Y` flag).
     pub mangohud_force: bool,
     pub protonhax: bool,
     pub wayland_force_enable: bool,
@@ -79,6 +79,8 @@ pub struct App {
     pub lsfg: bool,
     pub modding_support: bool,
     pub fix_audit: bool,
+    /// Manage the hypervisor kernel modules around the launch: unload KVM, load `cpuid_fault_emulation`, restore the previous state after the game (the `-h` flag).
+    pub hypervisor_modules: bool,
     /// Enable LinuwUx hypervisor loader via `LD_PRELOAD` (the `-v` flag).
     pub hypervisor: bool,
     /// Swap the game's `EOSSDK-Win64-Shipping.dll` for the EOS proxy (the `-E` flag).
@@ -146,6 +148,7 @@ impl Default for App {
             lsfg: false,
             modding_support: false,
             fix_audit: false,
+            hypervisor_modules: false,
             hypervisor: false,
             eos_proxy: false,
 

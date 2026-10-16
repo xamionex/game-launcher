@@ -60,14 +60,14 @@ const FIELDS: &[Field] = &[
     Field {
         key: "mangohud",
         label: "MangoHud",
-        flag: "-h",
+        flag: "-H",
         help: "Overlay; the flag disables it",
         section: "Enabled by default",
     },
     Field {
         key: "mangohud_force",
         label: "MangoHud force",
-        flag: "-H",
+        flag: "-Y",
         help: "Force MangoHud on in gaming mode",
         section: "Enabled by default",
     },
@@ -160,6 +160,13 @@ const FIELDS: &[Field] = &[
         label: "netsock LD_AUDIT",
         flag: "-F",
         help: "Cached netsock loader in LD_AUDIT",
+        section: "Disabled by default",
+    },
+    Field {
+        key: "hypervisor_modules",
+        label: "Hypervisor modules",
+        flag: "-h",
+        help: "Unload KVM, load cpuid_fault_emulation (asks for the root password)",
         section: "Disabled by default",
     },
     Field {
@@ -1957,6 +1964,14 @@ mod tests {
         editor.select_key("gamescope");
         editor.activate();
         assert_eq!(editor.generated_line(), "game -g -l 1 -- %command%");
+    }
+
+    #[test]
+    fn generator_emits_the_mangohud_force_flag() {
+        let mut editor = generator("force");
+        editor.select_key("mangohud_force");
+        editor.activate();
+        assert_eq!(editor.generated_line(), "game -Y -- %command%");
     }
 
     #[test]

@@ -43,10 +43,10 @@ pub const DEFAULT_CONFIG: &str = r#"# game-launcher configuration.
 # GameMode. -g disables it. Skipped automatically on BORE kernels and when ananicy-cpp is running, since both conflict with GameMode's renicing.
 gamemode = true
 
-# MangoHud overlay. -h disables it.
+# MangoHud overlay. -H disables it.
 mangohud = true
 
-# Force MangoHud on in gaming mode (handhelds). -H.
+# Force MangoHud on in gaming mode (handhelds). -Y.
 mangohud_force = false
 
 # ProtonHax launch hooks. -p disables them.
@@ -89,6 +89,9 @@ modding_support = false
 
 # LD_AUDIT netsock loader, cached and installed on demand. -F.
 fix_audit = false
+
+# Hypervisor kernel modules: unloads KVM (killing running virtual machines), loads cpuid_fault_emulation before the game and restores the previous module state when it exits, via modprobe as root. -h.
+hypervisor_modules = false
 
 # LinuwUx hypervisor loader, self-extracted. -v.
 hypervisor = false
@@ -151,6 +154,7 @@ pub struct FileConfig {
     pub lsfg: Option<bool>,
     pub modding_support: Option<bool>,
     pub fix_audit: Option<bool>,
+    pub hypervisor_modules: Option<bool>,
     pub hypervisor: Option<bool>,
     pub enable_custom_vkd3d: Option<bool>,
     pub eos_proxy: Option<bool>,
@@ -191,6 +195,7 @@ fn apply(cfg: &FileConfig, app: &mut App) -> Vec<String> {
         lsfg,
         modding_support,
         fix_audit,
+        hypervisor_modules,
         hypervisor,
         enable_custom_vkd3d,
         eos_proxy,

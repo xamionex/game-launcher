@@ -42,9 +42,10 @@ fn set_child_signals(cmd: &mut Command) {
     }
 }
 
-/// Ignore SIGINT/SIGTERM in the parent so it survives to run cleanup/sync-back,
-/// mirroring how bash keeps running while waiting on a foreground child.
-fn ignore_signals_in_parent() {
+/// Ignore SIGINT/SIGTERM in the parent so it survives to run cleanup/sync-back, mirroring how bash keeps running while waiting on a foreground child.
+///
+/// Public because the hypervisor module setup (the `-h` flag) also runs before [`run_game`] and must survive a Ctrl+C at a `sudo` prompt to restore the module state.
+pub fn ignore_signals_in_parent() {
     unsafe {
         libc::signal(libc::SIGINT, libc::SIG_IGN);
         libc::signal(libc::SIGTERM, libc::SIG_IGN);

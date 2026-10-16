@@ -82,7 +82,7 @@ netsock goes to `$HOME/.config/SLSsteam/tools/netsock/` and the hypervisor to `$
 Both are also fetched from their upstream releases into `~/.config/game-launcher/payloads/`, see [Payloads](#payloads).
 
 Hypervisor setup and usage guide: https://cs.rin.ru/forum/viewtopic.php?f=20&t=160056 \
-Hypervisor requires mangohud to be disabled sometimes to fully work. (-hv)
+Hypervisor requires mangohud to be disabled sometimes to fully work (`-vH`); `-h` handles the kernel module, only needed on AMD Ryzen on AM4 (older than 7000) and the Steam Deck, see [Hypervisor kernel modules](#hypervisor-kernel-modules).
 
 ### Handheld / Steam Deck gaming mode
 
@@ -100,8 +100,7 @@ sudo ln -s $PWD/target/release/game /usr/local/bin/game
 I've tried different ways to make it appear in path, this is the only one that worked in my testing, \
 let me know if you find a way without root requirement.
 
-Gaming mode is detected automatically and MangoHud is skipped, since the Steam overlay already provides a HUD there. \
-Use `-H` to force MangoHud on anyway.
+Gaming mode is detected automatically and MangoHud is skipped, since the Steam overlay already provides a HUD there; `-Y` forces it back on.
 
 ## Usage
 
@@ -134,8 +133,8 @@ Enabled by default (use the flag to disable):
 | Flag | Effect |
 | ---- | ------ |
 | `-g` | Disable GameMode (GameMode is also skipped automatically on BORE kernels and when ananicy-cpp is running, since both conflict with its renicing) |
-| `-h` | Disable MangoHud |
-| `-H` | Force MangoHud on (even in gaming mode) |
+| `-H` | Disable MangoHud |
+| `-Y` | Force MangoHud on even in gaming mode, where it is skipped by default |
 | `-p` | Disable ProtonHax |
 | `-W` | Force Wayland (override GPU detection) |
 | `-X` | Force disable Wayland |
@@ -155,6 +154,7 @@ Disabled by default (use the flag to enable):
 | `-m` | Enable modding support (WINEDLLOVERRIDES="dwmapi=n,b;winhttp=n,b;winmm=n,b;version=n,b") |
 | `-F` | Enable LD_AUDIT with `$HOME/.config/SLSsteam/tools/netsock/netsock.so` (installed from the payload cache if missing, merges with user-set LD_AUDIT) |
 | `-V` | Enable custom vkd3d-proton loading |
+| `-h` | Hypervisor kernel modules: unload KVM (killing any running virtual machines), load `cpuid_fault_emulation` before the game, and restore the previous module state when it exits, as root |
 | `-v` | Enable hypervisor loader: `LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so` and `PROTON_DISABLE_LSTEAMCLIENT=0` (self-extracts if missing) |
 | `-E` | Enable EOS-Proxy: replaces the game's `EOSSDK-Win64-Shipping.dll` with the proxy, skipped when the game is already patched |
 
@@ -188,6 +188,19 @@ If a wrapper is not installed it is skipped rather than causing a launch failure
 GameMode is also skipped when the system would fight it: \
 with the BORE scheduler active (`kernel.sched_bore = 1`, or a `-bore` kernel) \
 or when ananicy-cpp is running, since both renice processes themselves.
+
+## Hypervisor kernel modules
+
+`-h` prepares the kernel for the hypervisor before the game and undoes it after. This is only needed on AMD Ryzen on AM4 (older than 7000) and the Steam Deck:
+
+- before the game: unload `kvm_amd`/`kvm`, then load `cpuid_fault_emulation`,
+- after the game: unload `cpuid_fault_emulation` and load KVM again when it was running before.
+- `cpuid_fault_emulation` and KVM must never be loaded at the same time: the guide is clear that it crashes the system. Every step therefore checks `/sys/module` first, stops at the first failure, and unloads `cpuid_fault_emulation` before KVM is reloaded.
+- when both were loaded before the launch, only KVM is restored; the unsafe combination is not recreated.
+- a step that fails is rolled back to the state found before the launch and reported with a notification; the game still starts.
+- everything runs as root through `modprobe`: when the launcher runs in a terminal, `sudo` asks there; from Steam (no terminal) it uses a cached credential, otherwise the polkit dialog (`pkexec`, the KDE/GNOME authentication window) or a graphical password prompt (`zenity`/`kdialog`/`yad` feeding `sudo -S`). The password is asked once per phase, and polkit/sudo may remember it, so the restore at game exit often does not ask again. Unloading KVM kills any running virtual machines.
+
+`-h` is independent of `-v`: `-h` only touches the kernel modules, `-v` only puts the LinuwUx loader in `LD_PRELOAD`, so setups with their own module handling can use `-v` alone.
 
 ## Configuration
 
@@ -230,7 +243,7 @@ game -s -m -u ./mod-loader.sh PROTON_NO_ESYNC=1 -- %command%
 ```
 
 The rows start from your config, and the config file is only read, so the tool is safe to open at any time. \
-Only what you change becomes a flag, which is what per game tweaks need: uncheck MangoHud for one game and the line grows `-h`, enable modding support and it grows `-m`. \
+Only what you change becomes a flag, which is what per game tweaks need: uncheck MangoHud for one game and the line grows `-H`, enable modding support and it grows `-m`, force MangoHud back on in gaming mode and it grows `-Y`. \
 Changing nothing gives a bare `game -- %command%`, and the line is shown in the footer while you edit.
 
 - `enter` or `space` toggles a boolean, cycles a choice, or opens the value and list editors, exactly like `-C`;
@@ -300,7 +313,8 @@ Logging levels:
 A desktop notification (via `notify-send`, best effort) is sent when:
 
 - the game exits non-zero (a game crash), or
-- the wrapper cannot start the command (a `game` project failure).
+- the wrapper cannot start the command (a `game` project failure), or
+- the hypervisor module setup, rollback or restore (the `-h` flag) fails.
 
 ## Mods (`-u`)
 

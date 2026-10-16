@@ -6,6 +6,7 @@ pub mod config;
 pub mod config_file;
 pub mod eos;
 pub mod exec;
+pub mod hypervisor;
 pub mod logging;
 pub mod payload;
 pub mod ramdisk;
@@ -106,7 +107,12 @@ pub fn run() -> i32 {
     // ramdisk::create_ramdisk(&mut app);
     exec::run_mods(&mut app);
     wrappers::apply_environment_modifications(&app);
+    // `-h`: the module setup runs right before the game and is undone right after it, so KVM is gone for as little time as possible.
+    // The parent ignores INT/TERM from here on (like it does around the game itself), so a Ctrl+C at a `sudo` prompt cannot kill the launcher between the unload and the load steps.
+    exec::ignore_signals_in_parent();
+    let hypervisor_session = hypervisor::prepare(&app);
     let code = exec::run_game(&mut app);
+    hypervisor::restore(&app, hypervisor_session);
     // ramdisk::sync_back_from_ramdisk(&app);
     exec::cleanup(&app);
     code

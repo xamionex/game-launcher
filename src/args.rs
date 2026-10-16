@@ -41,8 +41,9 @@ fn is_assignment(token: &str) -> bool {
 fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
     match c {
         'g' => app.gamemode = false,
-        'h' => app.mangohud = false,
-        'H' => app.mangohud_force = true,
+        'H' => app.mangohud = false,
+        'Y' => app.mangohud_force = true,
+        'h' => app.hypervisor_modules = true,
         'p' => app.protonhax = false,
         'P' => app.pressure_vessel = true,
         's' => app.gamescope = true,
@@ -189,8 +190,10 @@ pub fn print_help(prog: &str) {
     eprintln!();
     eprintln!("== Enabled by default (can be disabled) ==");
     eprintln!("  -g            Disable GameMode (also skipped automatically on BORE kernels or with ananicy-cpp running)");
-    eprintln!("  -h            Disable MangoHud");
-    eprintln!("  -H            Force MangoHud on (even in gaming mode)");
+    eprintln!("  -H            Disable MangoHud");
+    eprintln!(
+        "  -Y            Force MangoHud on (even in gaming mode, where it is skipped by default)"
+    );
     eprintln!("  -p            Disable ProtonHax");
     eprintln!("  -W            Force Wayland (overrides GPU detection)");
     eprintln!("  -X            Force disable Wayland");
@@ -209,8 +212,9 @@ pub fn print_help(prog: &str) {
         "  -F            Enable LD_AUDIT with $HOME/.config/SLSsteam/tools/netsock/netsock.so"
     );
     eprintln!("  -V            Enable custom vkd3d-proton loading (~/Projects/vkd3d-proton/build/vkd3d-proton-master)");
+    eprintln!("  -h            Hypervisor kernel modules: unload KVM (kills running VMs), load cpuid_fault_emulation, restore the previous state when the game exits (asks for the root password)");
     eprintln!("  -v            Enable hypervisor loader (LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so, sets PROTON_DISABLE_LSTEAMCLIENT=0)");
-    eprintln!("                Might require you to disable mangohud with -h");
+    eprintln!("                Might require you to disable mangohud with -H");
     eprintln!("  -E            Enable EOS-Proxy (replaces the game's EOSSDK-Win64-Shipping.dll, skips games already patched)");
     eprintln!();
     eprintln!("== Actions ==");
@@ -281,7 +285,7 @@ mod tests {
     #[test]
     fn bundled_boolean_flags() {
         let mut app = App::default();
-        parse_flags(&mut app, &v(&["-gh", "--", "x"])).unwrap();
+        parse_flags(&mut app, &v(&["-gH", "--", "x"])).unwrap();
         assert!(!app.gamemode);
         assert!(!app.mangohud);
     }
@@ -356,7 +360,7 @@ mod tests {
     #[test]
     fn command_without_double_dash() {
         let mut app = App::default();
-        parse_flags(&mut app, &v(&["-h", "FOO=1", "/bin/game", "arg"])).unwrap();
+        parse_flags(&mut app, &v(&["-H", "FOO=1", "/bin/game", "arg"])).unwrap();
         assert!(!app.mangohud);
         assert_eq!(app.custom_exports.len(), 1);
         assert_eq!(app.original_cmd, v(&["/bin/game", "arg"]));
@@ -375,6 +379,35 @@ mod tests {
         assert!(!app.fix_audit);
         parse_flags(&mut app, &v(&["-F", "--", "x"])).unwrap();
         assert!(app.fix_audit);
+    }
+
+    #[test]
+    fn capital_h_disables_mangohud() {
+        let mut app = App::default();
+        assert!(app.mangohud);
+        parse_flags(&mut app, &v(&["-H", "--", "x"])).unwrap();
+        assert!(!app.mangohud);
+        assert!(!app.mangohud_force, "-H only disables MangoHud");
+        assert!(!app.hypervisor_modules);
+    }
+
+    #[test]
+    fn y_forces_mangohud_on_in_gaming_mode() {
+        let mut app = App::default();
+        assert!(!app.mangohud_force);
+        parse_flags(&mut app, &v(&["-Y", "--", "x"])).unwrap();
+        assert!(app.mangohud_force);
+        assert!(app.mangohud, "-Y only lifts the gaming mode skip");
+    }
+
+    #[test]
+    fn h_enables_the_hypervisor_module_setup() {
+        let mut app = App::default();
+        assert!(!app.hypervisor_modules);
+        parse_flags(&mut app, &v(&["-h", "--", "x"])).unwrap();
+        assert!(app.hypervisor_modules);
+        assert!(app.mangohud, "-h does not touch MangoHud");
+        assert!(!app.hypervisor, "-h does not load the LD_PRELOAD loader");
     }
 
     #[test]

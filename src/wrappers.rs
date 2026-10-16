@@ -449,15 +449,23 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
+/// Resolve `program` to an executable path, either directly (when it contains a `/`) or via a `PATH` lookup, like `command -v`.
+///
+/// Returns the path because the hypervisor module handling needs an absolute path for `pkexec`.
+pub(crate) fn find_in_path(program: &str) -> Option<PathBuf> {
+    if program.contains('/') {
+        let path = Path::new(program);
+        return is_executable(path).then(|| path.to_path_buf());
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(program))
+        .find(|candidate| is_executable(candidate))
+}
+
 /// True if `program` resolves to an executable, either directly (when it contains a `/`) or via a `PATH` lookup, like `command -v`.
 fn command_exists(program: &str) -> bool {
-    if program.contains('/') {
-        return is_executable(Path::new(program));
-    }
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| is_executable(&dir.join(program)))
+    find_in_path(program).is_some()
 }
 
 /// Prepend the LinuwUx hypervisor loader as the outermost wrapper.
@@ -646,7 +654,7 @@ pub fn apply_wrappers(app: &mut App) {
         app.protonhax = false;
     }
 
-    // Gaming mode (Steam Deck / handheld) already shows a HUD via the Steam overlay, so MangoHud is redundant there. `-H` forces it back on.
+    // Gaming mode (Steam Deck / handheld) already shows a HUD via the Steam overlay, so MangoHud is redundant there. `-Y` forces it back on.
     if is_gaming_mode() && !app.mangohud_force {
         app.log("Gaming mode detected, disabling MangoHud");
         app.mangohud = false;
