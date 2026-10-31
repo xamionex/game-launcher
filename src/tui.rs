@@ -36,6 +36,14 @@ fn choices_for(key: &str) -> &'static [i64] {
     }
 }
 
+/// Text settings that cycle through fixed string values instead of being typed in.
+fn text_choices_for(key: &str) -> &'static [&'static str] {
+    match key {
+        "wayland_default" => &["auto", "x11", "wayland"],
+        _ => &[],
+    }
+}
+
 /// Example entry shown while editing a list setting.
 fn list_example(key: &str) -> &'static str {
     match key {
@@ -210,6 +218,13 @@ const FIELDS: &[Field] = &[
         flag: "-r",
         help: "Replace the launched executable",
         section: "Values",
+    },
+    Field {
+        key: "wayland_default",
+        label: "Wayland default",
+        flag: "",
+        help: "auto (NVIDIA: Wayland, else: x11), x11 or wayland",
+        section: "Wayland",
     },
     Field {
         key: "wayland_monitor",
@@ -475,7 +490,7 @@ impl Editor {
         key != "wayland_monitor" || self.wayland_active()
     }
 
-    /// Whether the launcher would enable Wayland on this system, honoring the force flags from the document.
+    /// Whether the launcher would enable Wayland on this system.
     fn wayland_active(&self) -> bool {
         if self.get_bool("wayland_force_enable") {
             return true;
@@ -483,7 +498,11 @@ impl Editor {
         if self.get_bool("wayland_force_disable") {
             return false;
         }
-        self.gpu_wayland
+        match self.get_text("wayland_default").as_str() {
+            "wayland" => true,
+            "x11" => false,
+            _ => self.gpu_wayland,
+        }
     }
 
     /// Selectable values for the Wayland monitor: unset plus every detected output.
@@ -669,6 +688,12 @@ impl Editor {
                 self.mode = Mode::EditList;
                 self.list_selection = 0;
             }
+            Kind::Text if !text_choices_for(field.key).is_empty() => {
+                let choices = text_choices_for(field.key);
+                let current = self.get_text(field.key);
+                let index = choices.iter().position(|c| *c == current).unwrap_or(0);
+                self.set_value(field.key, Value::from(choices[(index + 1) % choices.len()]));
+            }
             Kind::Text => {
                 self.mode = Mode::EditText(TextEdit {
                     key: field.key.to_string(),
@@ -752,10 +777,16 @@ impl Editor {
                         .and_then(Item::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    if target == base_value || field.flag.is_empty() || target.is_empty() {
+                    if target == base_value || target.is_empty() {
                         continue;
                     }
-                    flags.push(format!("{} {}", field.flag, shell_quote(&target)));
+                    if field.flag.is_empty() {
+                        notes.push(format!(
+                            "{key}: your config sets this and no flag covers it, use -C"
+                        ));
+                    } else {
+                        flags.push(format!("{} {}", field.flag, shell_quote(&target)));
+                    }
                 }
                 Kind::List => {
                     let target = self.get_list(key);
@@ -910,15 +941,23 @@ impl Editor {
             self.step_monitor(delta);
             return;
         }
-        let choices = choices_for(field.key);
-        if choices.is_empty() {
+        let int_choices = choices_for(field.key);
+        if !int_choices.is_empty() {
+            let current = self.get_integer(field.key);
+            let index = int_choices.iter().position(|c| *c == current).unwrap_or(0) as i64;
+            let len = int_choices.len() as i64;
+            let next = (index + delta).rem_euclid(len) as usize;
+            self.set_value(field.key, Value::from(int_choices[next]));
             return;
         }
-        let current = self.get_integer(field.key);
-        let index = choices.iter().position(|c| *c == current).unwrap_or(0) as i64;
-        let len = choices.len() as i64;
-        let next = (index + delta).rem_euclid(len) as usize;
-        self.set_value(field.key, Value::from(choices[next]));
+        let str_choices = text_choices_for(field.key);
+        if !str_choices.is_empty() {
+            let current = self.get_text(field.key);
+            let index = str_choices.iter().position(|c| *c == current).unwrap_or(0) as i64;
+            let len = str_choices.len() as i64;
+            let next = (index + delta).rem_euclid(len) as usize;
+            self.set_value(field.key, Value::from(str_choices[next]));
+        }
     }
 
     fn handle_edit_text(&mut self, key: KeyEvent) {
@@ -1690,6 +1729,59 @@ mod tests {
         assert!(!editor.visible_keys().contains(&"wayland_monitor"));
         editor.gpu_wayland = true;
         assert!(editor.visible_keys().contains(&"wayland_monitor"));
+    }
+
+    #[test]
+    fn wayland_default_cycles_between_the_three_choices() {
+        let dir = std::env::temp_dir().join(format!("game_tui_wld_{}", std::process::id()));
+        let mut editor = Editor::new(
+            dir.join("config.toml"),
+            config_file::default_document(),
+            Vec::new(),
+            None,
+            false,
+        );
+        editor.select_key("wayland_default");
+        assert_eq!(editor.get_text("wayland_default"), "auto");
+
+        editor.activate();
+        assert_eq!(editor.get_text("wayland_default"), "x11");
+        editor.activate();
+        assert_eq!(editor.get_text("wayland_default"), "wayland");
+        editor.activate();
+        assert_eq!(editor.get_text("wayland_default"), "auto", "wraps around");
+
+        editor.cycle_choice(-1);
+        assert_eq!(
+            editor.get_text("wayland_default"),
+            "wayland",
+            "left arrow steps back"
+        );
+    }
+
+    #[test]
+    fn wayland_default_overrides_gpu_detection() {
+        let dir = std::env::temp_dir().join(format!("game_tui_wldv_{}", std::process::id()));
+
+        // GPU said Wayland, but the preference says x11, so the row is hidden.
+        let mut editor = Editor::new(
+            dir.join("config.toml"),
+            config_file::default_document(),
+            test_monitors(&["DP-1"]),
+            None,
+            true,
+        );
+        editor.set_value("wayland_default", Value::from("x11"));
+        assert!(!editor.visible_keys().contains(&"wayland_monitor"));
+
+        // GPU said X11, but the preference says wayland, so the row is shown.
+        editor.gpu_wayland = false;
+        editor.set_value("wayland_default", Value::from("wayland"));
+        assert!(editor.visible_keys().contains(&"wayland_monitor"));
+
+        // "auto" falls back to the GPU picker, as before.
+        editor.set_value("wayland_default", Value::from("auto"));
+        assert!(!editor.visible_keys().contains(&"wayland_monitor"));
     }
 
     #[test]

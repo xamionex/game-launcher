@@ -113,6 +113,11 @@ instances = 1
 # Replace the launched executable. -r.
 replacement_exe = ""
 
+# Wayland/X11 default when neither force flag is given.
+# "auto" lets the GPU decide (NVIDIA: Wayland, else X11).
+# "wayland" or "x11" change that choice so that -W and -X override it.
+wayland_default = "auto"
+
 # Primary monitor for the Wine Wayland driver, e.g. "DP-1".
 # This sets WAYLANDDRV_PRIMARY_MONITOR and is only applied when Wayland is enabled (see wayland_force_enable above). -M sets it, or pick one from the detected monitors with -C.
 wayland_monitor = ""
@@ -162,6 +167,7 @@ pub struct FileConfig {
     pub logging_level: Option<i32>,
     pub instances: Option<u32>,
     pub replacement_exe: Option<String>,
+    pub wayland_default: Option<String>,
     pub wayland_monitor: Option<String>,
 
     pub dll_overrides: Option<Vec<String>>,
@@ -214,6 +220,15 @@ fn apply(cfg: &FileConfig, app: &mut App) -> Vec<String> {
     }
     if let Some(v) = &cfg.replacement_exe {
         app.replacement_exe = v.clone();
+    }
+    if let Some(v) = &cfg.wayland_default {
+        match v.as_str() {
+            "auto" | "x11" | "wayland" => app.wayland_default = v.clone(),
+            _ => notes.push(format!(
+                "Config: wayland_default {v:?} is invalid (auto, x11 or wayland), keeping {}",
+                app.wayland_default
+            )),
+        }
     }
     if let Some(v) = &cfg.wayland_monitor {
         app.wayland_monitor = v.clone();
@@ -524,6 +539,20 @@ mod tests {
         assert_eq!(app.logging_level, 0);
         assert_eq!(notes.len(), 1);
         assert!(notes[0].contains("logging_level"));
+    }
+
+    #[test]
+    fn wayland_default_is_applied_and_validated() {
+        let cfg: FileConfig = toml::from_str("wayland_default = \"x11\"").unwrap();
+        let mut app = App::default();
+        assert!(apply(&cfg, &mut app).is_empty());
+        assert_eq!(app.wayland_default, "x11");
+
+        let cfg: FileConfig = toml::from_str("wayland_default = \"bogus\"").unwrap();
+        let mut app = App::default();
+        let notes = apply(&cfg, &mut app);
+        assert_eq!(app.wayland_default, "auto");
+        assert!(notes.iter().any(|n| n.contains("wayland_default")));
     }
 
     #[test]

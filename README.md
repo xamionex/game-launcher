@@ -5,7 +5,7 @@ A Steam launch wrapper.
 It wraps the game command Steam hands to it (`%command%`), \
 Applies tools (GameMode, MangoHud, ProtonHax), \
 Sets a curated set of Proton/DXVK/VKD3D environment variables (src/wrappers.rs), \
-Detects the GPU vendor and sets Wayland (amd off, nvidia on), \
+Chooses Wayland or X11 from `wayland_default` in the config (by default: NVIDIA uses Wayland, everything else is x11), \
 and writes structured per game logs to `~/logs/game`.
 
 Optionally: launches background mods.
@@ -16,6 +16,7 @@ written on first run; command line flags override it. See [Configuration](#confi
 The Cargo package is named `game-launcher`; the built binary is named `game` (see `[[bin]]` in `Cargo.toml`).
 
 NVIDIA NOTE: If you're using nvidia, this launcher makes your games launch in wayland because performance is usually better in wayland. \
+To keep them on X11 instead, set `wayland_default = "x11"` in the config or pass `-X`. \
 But there are issues with this like: tray icons not going into tray and some apps (launchers) being a white screen. \
 To fix this, use this proton-cachyos fork that fixes wayland issues: https://github.com/nanomatters/proton-cachyos/releases/ \
 If you're having an issue with your games opening on a different monitor: set the primary monitor with `-M DP-1` (or `wayland_monitor` in the config, `-C` lists the detected monitors). \
@@ -65,14 +66,17 @@ Requires a Rust toolchain.
 ```sh
 cargo build --release
 ```
+
 binary is located at target/release/game
 
 Optionally symlink it onto your local bin (add this to your path):
+
 ```sh
 ln -s $PWD/target/release/game ~/.local/bin/game
 ```
 
 symlink for dxvk as well:
+
 ```
 ln -s $PWD/dxvk ~/.config/dxvk
 ```
@@ -89,10 +93,13 @@ Hypervisor requires mangohud to be disabled sometimes to fully work (`-vH`); `-h
 Gaming mode (the gamescope session) does not source your shell profiles, so `~/.local/bin` may not be on `PATH` and Steam will fail to find the `game` binary. \
 If a game fails to start and no log appears in `~/logs/game/`, this is why. \
 Use the absolute path in Launch Options:
+
 ```
 /home/deck/.local/bin/game -Fo -- %command%
 ```
+
 or install game to `/usr/local/bin` so that you can still do `game -- %command%` without the full path:
+
 ```
 sudo ln -s $PWD/target/release/game /usr/local/bin/game
 ```
@@ -130,55 +137,55 @@ game FLAG=1 OTHER=2 -- %command%   # exports both
 
 Enabled by default (use the flag to disable):
 
-| Flag | Effect |
-| ---- | ------ |
+| Flag | Effect                                                                                                                                           |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `-g` | Disable GameMode (GameMode is also skipped automatically on BORE kernels and when ananicy-cpp is running, since both conflict with its renicing) |
-| `-H` | Disable MangoHud |
-| `-Y` | Force MangoHud on even in gaming mode, where it is skipped by default |
-| `-p` | Disable ProtonHax |
-| `-W` | Force Wayland (override GPU detection) |
-| `-X` | Force disable Wayland |
+| `-H` | Disable MangoHud                                                                                                                                 |
+| `-Y` | Force MangoHud on even in gaming mode, where it is skipped by default                                                                            |
+| `-p` | Disable ProtonHax                                                                                                                                |
+| `-W` | Force Wayland (overrides `wayland_default`)                                                                                                      |
+| `-X` | Force disable Wayland (overrides `wayland_default`)                                                                                              |
 
 Disabled by default (use the flag to enable):
 
-| Flag | Effect |
-| ---- | ------ |
-| `-P` | Enable Pressure Vessel elimination |
-| `-L` | Enable SDL3 elimination in the Steam runtime (`STEAM_COMPAT_RUNTIME_SDL3=0`) |
-| `-s` | Enable Gamescope (X11 backend) |
-| `-S` | Enable Gamescope (Wayland backend) |
-| `-w` | Run in wezterm |
-| `-o` | Enable OnlineFix DLL overrides (WINEDLLOVERRIDES="OnlineFix64=n,b;SteamOverlay64=n,b;winmm=n,b;dnet=n,b;steam_api64=n,b") |
-| `-e` | Kill mod processes on exit |
-| `-f` | Enable LSFG-VK |
-| `-m` | Enable modding support (WINEDLLOVERRIDES="dwmapi=n,b;winhttp=n,b;winmm=n,b;version=n,b") |
-| `-F` | Enable LD_AUDIT with `$HOME/.config/SLSsteam/tools/netsock/netsock.so` (installed from the payload cache if missing, merges with user-set LD_AUDIT) |
-| `-V` | Enable custom vkd3d-proton loading |
+| Flag | Effect                                                                                                                                                                                   |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-P` | Enable Pressure Vessel elimination                                                                                                                                                       |
+| `-L` | Enable SDL3 elimination in the Steam runtime (`STEAM_COMPAT_RUNTIME_SDL3=0`)                                                                                                             |
+| `-s` | Enable Gamescope (X11 backend)                                                                                                                                                           |
+| `-S` | Enable Gamescope (Wayland backend)                                                                                                                                                       |
+| `-w` | Run in wezterm                                                                                                                                                                           |
+| `-o` | Enable OnlineFix DLL overrides (WINEDLLOVERRIDES="OnlineFix64=n,b;SteamOverlay64=n,b;winmm=n,b;dnet=n,b;steam_api64=n,b")                                                                |
+| `-e` | Kill mod processes on exit                                                                                                                                                               |
+| `-f` | Enable LSFG-VK                                                                                                                                                                           |
+| `-m` | Enable modding support (WINEDLLOVERRIDES="dwmapi=n,b;winhttp=n,b;winmm=n,b;version=n,b")                                                                                                 |
+| `-F` | Enable LD_AUDIT with `$HOME/.config/SLSsteam/tools/netsock/netsock.so` (installed from the payload cache if missing, merges with user-set LD_AUDIT)                                      |
+| `-V` | Enable custom vkd3d-proton loading                                                                                                                                                       |
 | `-h` | Hypervisor kernel modules: unload KVM (killing any running virtual machines), load `cpuid_fault_emulation` before the game, and restore the previous module state when it exits, as root |
-| `-v` | Enable hypervisor loader: `LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so` and `PROTON_DISABLE_LSTEAMCLIENT=0` (self-extracts if missing) |
-| `-E` | Enable EOS-Proxy: replaces the game's `EOSSDK-Win64-Shipping.dll` with the proxy, skipped when the game is already patched |
+| `-v` | Enable hypervisor loader: `LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so` and `PROTON_DISABLE_LSTEAMCLIENT=0` (self-extracts if missing)                                              |
+| `-E` | Enable EOS-Proxy: replaces the game's `EOSSDK-Win64-Shipping.dll` with the proxy, skipped when the game is already patched                                                               |
 
 Valued flags:
 
-| Flag | Effect |
-| ---- | ------ |
-| `-l LEVEL` | Logging level: `-1` silent, `0` normal, `1` verbose |
-| `-u MOD` | Add a background mod command (repeatable) |
-| `-r EXE` | Replace the launched executable |
-| `-d DLLS` | Add DLL overrides, semicolon separated (`dinput8=n,b;dxgi=n,b`) |
+| Flag         | Effect                                                                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `-l LEVEL`   | Logging level: `-1` silent, `0` normal, `1` verbose                                                                                   |
+| `-u MOD`     | Add a background mod command (repeatable)                                                                                             |
+| `-r EXE`     | Replace the launched executable                                                                                                       |
+| `-d DLLS`    | Add DLL overrides, semicolon separated (`dinput8=n,b;dxgi=n,b`)                                                                       |
 | `-M MONITOR` | Set the primary monitor for the Wine Wayland driver (`WAYLANDDRV_PRIMARY_MONITOR`, e.g. `DP-1`); only applied when Wayland is enabled |
-| `-i N` | Number of instances (accepted; currently inert) |
+| `-i N`       | Number of instances (accepted; currently inert)                                                                                       |
 
 Short flags may be bundled (`-ghk`) and valued flags accept attached or
 separate arguments (`-l1` or `-l 1`).
 
 Actions:
 
-| Flag | Effect |
-| ---- | ------ |
-| `-C` | Open the interactive config editor (`~/.config/game-launcher/config.toml`) and exit, ignoring any game command |
+| Flag | Effect                                                                                                                               |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `-C` | Open the interactive config editor (`~/.config/game-launcher/config.toml`) and exit, ignoring any game command                       |
 | `-k` | Open the launch options generator, copy the resulting Steam launch options line to the clipboard and exit, ignoring any game command |
-| `-U` | Update the installed launcher to the newest release and exit, ignoring any game command |
+| `-U` | Update the installed launcher to the newest release and exit, ignoring any game command                                              |
 
 ### Missing wrapper tools
 
@@ -211,7 +218,7 @@ Values set there are the base for every launch, command line flags override them
 Use `-C` to edit it in a terminal (TUI):
 
 - up/down (or `j`/`k`) select, enter/space toggles a boolean,
-- choice values such as the log level cycle with the left/right arrows or space,
+- choice values such as the log level and the Wayland default cycle with the left/right arrows or space,
 - enter on a value opens inline editing, enter commits and esc cancels,
 - enter on a list opens the list editor: enter edits an entry, `a` adds, `d` deletes.
   Entries are one item each, for example `dinput8=n,b` in `dll_overrides`,
@@ -227,8 +234,12 @@ A config file that cannot be parsed is ignored as a whole, with the reason print
 Keys the launcher does not know are ignored (and reported in the log), so a config written by a newer version or a typo never takes the whole file down. \
 `-C` needs a terminal, so run it from a shell rather than from Steam launch options.
 
+The `wayland_default` setting picks Wayland or X11 for every launch: `auto` (the default) enables Wayland on NVIDIA and X11 otherwise, while `wayland` and `x11` force that choice. \
+The `-W`/`-X` flags and `wayland_force_enable`/`wayland_force_disable` still win over it, and `-C` cycles the three values. \
+The setting has no flag of its own.
+
 The `wayland_monitor` setting (`-M`) picks the monitor games open on when the Wine Wayland driver is in use. \
-The editor only shows the row when Wayland is enabled (GPU detection, or `wayland_force_enable`/`wayland_force_disable`), and only lets you pick from the outputs it detects through `wayland-info`, `wlr-randr`, `hyprctl`, `swaymsg`, `kscreen-doctor` or the DRM connectors. \
+The editor only shows the row when Wayland is enabled (the `wayland_default` choice, or `wayland_force_enable`/`wayland_force_disable`), and only lets you pick from the outputs it detects through `wayland-info`, `wlr-randr`, `hyprctl`, `swaymsg`, `kscreen-doctor` or the DRM connectors. \
 The launcher exports it as `WAYLANDDRV_PRIMARY_MONITOR` and, when Wayland is off, ignores it with a log line.
 
 Next to the picker the editor shows `this terminal: <output>`, so the names can be told apart (KWin, Hyprland and Sway can report which output the focused window is on). \
@@ -249,7 +260,7 @@ Changing nothing gives a bare `game -- %command%`, and the line is shown in the 
 - `enter` or `space` toggles a boolean, cycles a choice, or opens the value and list editors, exactly like `-C`;
 - `p` switches between `game` and the absolute path of the running binary, for setups where `PATH` does not have it (a root install makes `game` enough, gaming mode may need the path);
 - `s` copies the line without leaving, `q` (or `esc`) copies it and exits, `ctrl+c` exits without copying;
-- changes a flag cannot express are listed in the footer: a boolean your config turned off cannot be turned back on by a flag, and a list entry can be added by a flag but not removed, so those cases point at `-C`.
+- changes a flag cannot express are listed in the footer: a boolean your config turned off cannot be turned back on by a flag, a value with no flag such as `wayland_default` can only be changed there, and a list entry can be added by a flag but not removed, so those cases point at `-C`.
 
 The copy is done with the first of `wl-copy`, `xclip`, `xsel` or `pbcopy` that works. \
 The line is always printed to the terminal as well, so a machine without a clipboard tool still shows it.
@@ -259,11 +270,11 @@ The line is always printed to the terminal as well, so a machine without a clipb
 Three payloads are fetched from their upstream releases and cached in
 `~/.config/game-launcher/payloads/`:
 
-| File | Source | Used by |
-| ---- | ------ | ------- |
-| `EOSSDK-Win64-Shipping.dll` | [eos-proxy](https://github.com/yesyes0649/eos-proxy) releases | `-E` |
-| `netsock.so` | [steamnetsock-patch](https://github.com/yesyes0649/steamnetsock-patch) releases (`fix.so`) | `-F` |
-| `LinUwUx.so` | [linuwux-runtime](https://github.com/brcly/linuwux-runtime) releases (`LinUwUx.so`) | `-v` |
+| File                        | Source                                                                                     | Used by |
+| --------------------------- | ------------------------------------------------------------------------------------------ | ------- |
+| `EOSSDK-Win64-Shipping.dll` | [eos-proxy](https://github.com/yesyes0649/eos-proxy) releases                              | `-E`    |
+| `netsock.so`                | [steamnetsock-patch](https://github.com/yesyes0649/steamnetsock-patch) releases (`fix.so`) | `-F`    |
+| `LinUwUx.so`                | [linuwux-runtime](https://github.com/brcly/linuwux-runtime) releases (`LinUwUx.so`)        | `-v`    |
 
 Each payload is downloaded once. \
 If the download fails (offline, GitHub unreachable, curl missing) the copy embedded in the binary is used instead, and a failed download is not cached, so a later launch can still pick up the latest release. \

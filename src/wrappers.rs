@@ -10,12 +10,14 @@ use crate::config::{App, EMPTY_MARKER};
 use crate::payload;
 
 /// Upstream release asset for the netsock patch (`fix.so`); fetched into the payload cache on first use and falling back to the embedded copy.
-pub(crate) const NETSNOCK_URL: &str = "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so";
+pub(crate) const NETSNOCK_URL: &str =
+    "https://github.com/yesyes0649/steamnetsock-patch/releases/latest/download/fix.so";
 /// Name of the netsock loader in the payload cache and in the repository.
 pub(crate) const NETSOCK_NAME: &str = "netsock.so";
 
 /// Upstream release asset for the hypervisor loader (`LinUwUx.so`); fetched into the payload cache on first use and falling back to the embedded copy.
-pub(crate) const LINUWUX_URL: &str = "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so";
+pub(crate) const LINUWUX_URL: &str =
+    "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so";
 /// Name of the hypervisor loader in the payload cache and in the repository.
 pub(crate) const LINUWUX_NAME: &str = "LinUwUx.so";
 
@@ -39,24 +41,37 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 
-/// Decide whether to enable Wayland, honoring `-W`/`-X` overrides and otherwise enabling it for NVIDIA GPUs.
+/// Decide whether to enable Wayland, honoring `-W`/`-X` overrides, then the `wayland_default` preference, and otherwise enabling it for NVIDIA GPUs.
 pub fn determine_wayland_by_gpu(app: &mut App) {
-    let info = gpu_info();
-    app.log("Determining wayland");
+    app.log("Determining Wayland");
 
-    if app.wayland_force_enable {
-        app.log("Wayland was force enabled");
-        app.wayland_enabled = true;
+    app.wayland_enabled = if app.wayland_force_enable {
+        app.log("Wayland force enabled");
+        true
     } else if app.wayland_force_disable {
-        app.log("Wayland was force disabled");
-        app.wayland_enabled = false;
-    } else if contains_ci(&info, "NVIDIA") {
-        app.log("Detected NVIDIA: wayland enabled");
-        app.wayland_enabled = true;
+        app.log("Wayland force disabled");
+        false
     } else {
-        app.log("Detected NON-NVIDIA: wayland disabled");
-        app.wayland_enabled = false;
-    }
+        match app.wayland_default.as_str() {
+            "wayland" => {
+                app.log("Wayland default: wayland");
+                true
+            }
+            "x11" => {
+                app.log("Wayland default: x11");
+                false
+            }
+            _ => {
+                let enabled = contains_ci(&gpu_info(), "NVIDIA");
+                app.log(if enabled {
+                    "Detected NVIDIA: Wayland enabled"
+                } else {
+                    "Detected non-NVIDIA: Wayland disabled"
+                });
+                enabled
+            }
+        }
+    };
 }
 
 /// True when running inside a Steam Deck style gaming-mode session (gamescope with the Steam session type).
@@ -622,19 +637,21 @@ pub fn apply_wrappers(app: &mut App) {
         }
     }
 
-
     if contains_ci(&info, "NVIDIA") {
         std::env::set_var("__GL_THREADED_OPTIMIZATIONS", "1");
         std::env::set_var("PROTON_NVIDIA_LIBS", "1");
         std::env::set_var("PROTON_NVIDIA_LIBS_NO_32BIT", "1");
-    	std::env::set_var("VKD3D_CONFIG", "dxr12,dxr,descriptor_heap,enable_experimental_features");
-	    std::env::set_var("PROTON_VKD3D_HEAP", "1");
+        std::env::set_var(
+            "VKD3D_CONFIG",
+            "dxr12,dxr,descriptor_heap,enable_experimental_features",
+        );
+        std::env::set_var("PROTON_VKD3D_HEAP", "1");
     } else if contains_ci(&info, "AMD")
         || contains_ci(&info, "Advanced Micro Devices")
         || contains_ci(&info, "Radeon")
     {
-		std::env::set_var("VKD3D_CONFIG", "dxr12,dxr,enable_experimental_features");
-		// AMD
+        std::env::set_var("VKD3D_CONFIG", "dxr12,dxr,enable_experimental_features");
+        // AMD
     }
 
     // Native games skip protonhax; Proton games never had it on anyway.
@@ -964,6 +981,32 @@ interface: 'wl_output',                           version:  4, name: 66
         let none_focused = r#"[{"name":"1","focused":false,"output":"DP-2"}]"#;
         assert_eq!(focused_workspace_output(none_focused), None);
         assert_eq!(focused_workspace_output("not json"), None);
+    }
+
+    #[test]
+    fn wayland_default_and_force_flags_decide_wayland() {
+        let mut app = App {
+            wayland_default: "wayland".to_string(),
+            ..App::default()
+        };
+
+        determine_wayland_by_gpu(&mut app);
+        assert!(app.wayland_enabled, "wayland_default = wayland");
+
+        app.wayland_default = "x11".to_string();
+        determine_wayland_by_gpu(&mut app);
+        assert!(!app.wayland_enabled, "wayland_default = x11");
+
+        app.wayland_default = "wayland".to_string();
+        app.wayland_force_disable = true;
+        determine_wayland_by_gpu(&mut app);
+        assert!(!app.wayland_enabled, "force disable wins over the default");
+
+        app.wayland_default = "x11".to_string();
+        app.wayland_force_disable = false;
+        app.wayland_force_enable = true;
+        determine_wayland_by_gpu(&mut app);
+        assert!(app.wayland_enabled, "force enable wins over the default");
     }
 
     #[test]

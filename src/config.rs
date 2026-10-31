@@ -65,6 +65,7 @@ pub struct App {
     pub protonhax: bool,
     pub wayland_force_enable: bool,
     pub wayland_force_disable: bool,
+    pub wayland_default: String,
     pub enable_custom_vkd3d: bool,
 
     // === Toggles disabled by default (can be enabled) ===
@@ -136,6 +137,7 @@ impl Default for App {
             protonhax: true,
             wayland_force_enable: false,
             wayland_force_disable: false,
+            wayland_default: "auto".to_string(),
             enable_custom_vkd3d: false,
 
             pressure_vessel: false,
