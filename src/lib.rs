@@ -7,6 +7,7 @@ pub mod config_file;
 pub mod eos;
 pub mod exec;
 pub mod hypervisor;
+pub mod legion;
 pub mod logging;
 pub mod payload;
 pub mod ramdisk;
@@ -93,6 +94,14 @@ pub fn run() -> i32 {
     command::determine_proton(&mut app);
     wrappers::determine_wayland_by_gpu(&mut app);
 
+    // Legion profile selection needs the App ID and executable that logging already derived.
+    if let Err(error) = legion::resolve(&mut app) {
+        app.log(&format!("Legion: {error}"));
+        args::notify_invalid_usage();
+        eprintln!("Error: {error}");
+        return 1;
+    }
+
     if let Err(msg) = command::build_command(&mut app) {
         args::notify_invalid_usage();
         eprintln!("Error: {msg}");
@@ -101,6 +110,15 @@ pub fn run() -> i32 {
     }
 
     eos::apply_eos_proxy(&app);
+    // Validate the unwrapped Proton command before host wrappers make it opaque to Legion.
+    if app.legion {
+        if let Err(error) = legion::prepare(&mut app) {
+            app.log(&format!("Legion: {error}"));
+            args::notify_invalid_usage();
+            eprintln!("Error: {error}");
+            return 1;
+        }
+    }
     wrappers::apply_wrappers(&mut app);
     command::setup_custom_vkd3d(&app);
     // RAM disk staging is disabled for now; the module is kept for later.

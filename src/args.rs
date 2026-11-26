@@ -69,6 +69,10 @@ fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
         'F' => app.fix_audit = true,
         'v' => app.hypervisor = true,
         'E' => app.eos_proxy = true,
+        'K' => {
+            app.legion = true;
+            app.legion_explicit = true;
+        }
         'k' => app.generator_tui = true,
         'U' => app.update_self = true,
         'C' => app.config_tui = true,
@@ -216,6 +220,7 @@ pub fn print_help(prog: &str) {
     eprintln!("  -v            Enable hypervisor loader (LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so, sets PROTON_DISABLE_LSTEAMCLIENT=0)");
     eprintln!("                Might require you to disable mangohud with -H");
     eprintln!("  -E            Enable EOS-Proxy (replaces the game's EOSSDK-Win64-Shipping.dll, skips games already patched)");
+    eprintln!("  -K            Run the game inside Legion KVM (Proton games only; disables -v, -h, -p, -F, -f, -L and -P)");
     eprintln!();
     eprintln!("== Actions ==");
     eprintln!("  -C            Open the interactive config editor (~/.config/game-launcher/config.toml) and exit");
@@ -424,6 +429,19 @@ mod tests {
         assert!(!app.eos_proxy);
         parse_flags(&mut app, &v(&["-E", "--", "x"])).unwrap();
         assert!(app.eos_proxy);
+    }
+
+    #[test]
+    fn legion_flag_is_off_by_default_and_enabled_explicitly() {
+        let mut app = App::default();
+        assert!(!app.legion);
+        assert!(!app.legion_explicit);
+        parse_flags(&mut app, &v(&["-K", "--", "x"])).unwrap();
+        assert!(app.legion);
+        assert!(
+            app.legion_explicit,
+            "-K must override a profile's enabled = false"
+        );
     }
 
     #[test]

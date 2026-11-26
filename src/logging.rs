@@ -322,6 +322,59 @@ pub fn log_game(app: &App) {
         );
     }
 
+    if app.legion {
+        log_separator(log, '=', "LEGION KVM");
+        append_line(log, "Legion Enabled   : true");
+        append_line(
+            log,
+            &format!(
+                "Legion Binary    : {}",
+                if app.legion_binary.as_os_str().is_empty() {
+                    "'(unresolved)'".to_string()
+                } else {
+                    app.legion_binary.display().to_string()
+                }
+            ),
+        );
+        if let Some(profile) = app
+            .legion_profile
+            .and_then(|index| app.legion_games.get(index))
+        {
+            append_line(
+                log,
+                &format!("Legion Profile   : {}", profile.display_name()),
+            );
+            append_line(
+                log,
+                &format!(
+                    "Legion Matchers  : app_id={:?} exe={:?}",
+                    profile.app_id, profile.exe
+                ),
+            );
+            append_line(
+                log,
+                &format!("Legion Memory    : {} MiB", profile.memory_mib),
+            );
+            append_line(
+                log,
+                &format!(
+                    "Legion Render    : {}",
+                    if profile.render_node.is_empty() {
+                        "auto"
+                    } else {
+                        profile.render_node.as_str()
+                    }
+                ),
+            );
+            append_line(log, &format!("Legion Fullscreen: {}", profile.fullscreen));
+            append_line(log, &format!("Legion Startup UI: {}", profile.startup_ui));
+            append_line(
+                log,
+                &format!("Legion Timeout   : {} s", profile.startup_timeout_seconds),
+            );
+        }
+    }
+
     if !app.custom_exports.is_empty() {
         log_separator(log, '=', "MODIFICATIONS TO ENVIRONMENT");
         for export in &app.custom_exports {

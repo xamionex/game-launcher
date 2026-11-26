@@ -14,8 +14,12 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
-use toml_edit::{Array, DocumentMut, Item, Value};
+use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
+use crate::config::{
+    GameProfile, LEGION_MEMORY_MAX_MIB, LEGION_MEMORY_MIN_MIB, LEGION_TIMEOUT_MAX_SECONDS,
+    LEGION_TIMEOUT_MIN_SECONDS,
+};
 use crate::config_file;
 use crate::wrappers::Monitor;
 
@@ -53,6 +57,84 @@ fn list_example(key: &str) -> &'static str {
         _ => "",
     }
 }
+
+/// Kind of a Legion profile field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProfileKind {
+    Bool,
+    Integer,
+    Text,
+    /// Text that cycles through a fixed set instead of being typed in.
+    Choice(&'static [&'static str]),
+}
+
+/// One editable field of a Legion profile, in display order.
+///
+/// The keys match the fields of [`GameProfile`] and the tables written by [`config_file::profile_table`].
+struct ProfileField {
+    key: &'static str,
+    label: &'static str,
+    kind: ProfileKind,
+    help: &'static str,
+}
+
+/// The per-game Legion profile form.
+const PROFILE_FIELDS: &[ProfileField] = &[
+    ProfileField {
+        key: "name",
+        label: "Name",
+        kind: ProfileKind::Text,
+        help: "Label shown in this list; empty falls back to the executable or App ID",
+    },
+    ProfileField {
+        key: "app_id",
+        label: "Steam App ID",
+        kind: ProfileKind::Text,
+        help: "Matched first; digits only, empty disables this matcher",
+    },
+    ProfileField {
+        key: "exe",
+        label: "Executable",
+        kind: ProfileKind::Text,
+        help: "Matched second by file name, e.g. game.exe",
+    },
+    ProfileField {
+        key: "enabled",
+        label: "Legion enabled",
+        kind: ProfileKind::Bool,
+        help: "Off keeps this game on the host unless -K is passed",
+    },
+    ProfileField {
+        key: "memory_mib",
+        label: "Memory (MiB)",
+        kind: ProfileKind::Integer,
+        help: "Guest memory in MiB",
+    },
+    ProfileField {
+        key: "render_node",
+        label: "Render node",
+        kind: ProfileKind::Text,
+        help: "e.g. /dev/dri/renderD128; empty lets Legion choose",
+    },
+    ProfileField {
+        key: "fullscreen",
+        label: "Fullscreen",
+        kind: ProfileKind::Bool,
+        help: "Ask Legion for a fullscreen window",
+    },
+    ProfileField {
+        key: "startup_ui",
+        label: "Startup UI",
+        kind: ProfileKind::Choice(&["auto", "window", "log", "off"]),
+        help: "Legion startup display",
+    },
+    ProfileField {
+        key: "startup_timeout_seconds",
+        label: "Startup timeout",
+        kind: ProfileKind::Integer,
+        help: "Seconds to wait for the first frame",
+    },
+];
 
 /// The settings shown by the editor, in display order.
 ///
@@ -234,6 +316,27 @@ const FIELDS: &[Field] = &[
         section: "Wayland",
     },
     Field {
+        key: "legion",
+        label: "Legion KVM",
+        flag: "-K",
+        help: "Run Proton games in Legion's VM; enabled for one launch with -K",
+        section: "Legion KVM",
+    },
+    Field {
+        key: "legion_path",
+        label: "Legion path",
+        flag: "",
+        help: "Legion executable; empty means next to game, then PATH",
+        section: "Legion KVM",
+    },
+    Field {
+        key: "legion_games",
+        label: "Game profiles",
+        flag: "",
+        help: "Per-game Legion settings; enter opens the list",
+        section: "Legion KVM",
+    },
+    Field {
         key: "dll_overrides",
         label: "DLL overrides",
         flag: "-d",
@@ -263,6 +366,8 @@ enum Kind {
     Integer,
     Text,
     List,
+    /// `[[legion_games]]`, edited by its own list and form.
+    Profiles,
 }
 
 impl Kind {
@@ -292,6 +397,8 @@ struct TextEdit {
     entry: Option<usize>,
     /// True when the edit inserts a new entry at `entry` instead of replacing one.
     adding: bool,
+    /// Set when the edit belongs to a Legion profile: profile index and field index.
+    profile: Option<(usize, usize)>,
     buffer: String,
     /// Cursor position as a character index into `buffer`.
     cursor: usize,
@@ -310,6 +417,13 @@ enum Mode {
     Form,
     EditText(TextEdit),
     EditList,
+    /// The `-C` Legion game list.
+    Profiles,
+    /// One Legion profile, edited field by field.
+    EditProfile {
+        profile: usize,
+        field: usize,
+    },
 }
 
 struct Editor {
@@ -327,6 +441,8 @@ struct Editor {
     /// Index into the entries vector built from [`FIELDS`].
     selection: usize,
     list_selection: usize,
+    /// Selected row in the `-C` Legion game list.
+    profile_selection: usize,
     dirty: bool,
     confirm_quit: bool,
     status: String,
@@ -395,6 +511,7 @@ impl Editor {
             absolute: false,
             selection: 0,
             list_selection: 0,
+            profile_selection: 0,
             dirty: false,
             confirm_quit: false,
             status: String::new(),
@@ -412,6 +529,9 @@ impl Editor {
     // ---- document access ----
 
     fn kind(&self, key: &str) -> Kind {
+        if key == "legion_games" {
+            return Kind::Profiles;
+        }
         self.doc.get(key).map(Kind::of).unwrap_or(Kind::Text)
     }
 
@@ -467,6 +587,174 @@ impl Editor {
         self.set_value(key, Value::Array(array));
     }
 
+    // ---- Legion profiles ----
+
+    fn profile_table(&self, index: usize) -> Option<&Table> {
+        self.doc
+            .get("legion_games")
+            .and_then(Item::as_array_of_tables)
+            .and_then(|tables| tables.get(index))
+    }
+
+    fn profile(&self, index: usize) -> Option<GameProfile> {
+        self.profile_table(index)
+            .map(config_file::profile_from_table)
+    }
+
+    fn profile_count(&self) -> usize {
+        config_file::profiles_in(&self.doc).len()
+    }
+
+    /// Append a profile with defaults and return its index.
+    fn add_profile(&mut self) -> usize {
+        let profile = GameProfile {
+            name: "New Legion game".to_string(),
+            ..GameProfile::default()
+        };
+        let index = config_file::push_profile(&mut self.doc, &profile);
+        self.dirty = true;
+        index
+    }
+
+    /// Remove a profile; the last removal restores `legion_games = []`.
+    fn remove_profile(&mut self, index: usize) {
+        let empty = {
+            let tables = config_file::profile_tables_mut(&mut self.doc);
+            if index >= tables.len() {
+                return;
+            }
+            tables.remove(index);
+            tables.is_empty()
+        };
+        self.dirty = true;
+        if empty {
+            config_file::clear_profiles(&mut self.doc);
+        }
+    }
+
+    /// Write one field of a profile, keeping the comments around the value.
+    fn set_profile_value(&mut self, index: usize, key: &str, value: Value) {
+        if let Some(table) = config_file::profile_tables_mut(&mut self.doc).get_mut(index) {
+            config_file::set_profile_field(table, key, value);
+            self.dirty = true;
+        }
+    }
+
+    /// Profile shown by the open profile form, including while one of its fields is being typed.
+    fn active_profile(&self) -> Option<usize> {
+        match &self.mode {
+            Mode::EditProfile { profile, .. } => Some(*profile),
+            Mode::EditText(edit) => edit.profile.map(|(profile, _)| profile),
+            _ => None,
+        }
+    }
+
+    /// Selected row in the open profile form.
+    fn profile_selected_field(&self) -> usize {
+        match &self.mode {
+            Mode::EditProfile { field, .. } => *field,
+            Mode::EditText(edit) => edit.profile.map(|(_, field)| field).unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    /// Toggle a profile boolean or cycle its choice, or open the text prompt.
+    fn activate_profile_field(&mut self, profile: usize, field: usize) {
+        let definition = &PROFILE_FIELDS[field];
+        let Some(current) = self.profile(profile) else {
+            self.mode = Mode::Profiles;
+            return;
+        };
+        match definition.kind {
+            ProfileKind::Bool => {
+                let value = profile_bool_value(&current, definition.key);
+                self.set_profile_value(profile, definition.key, Value::from(!value));
+            }
+            ProfileKind::Choice(choices) => {
+                let value = profile_text_value(&current, definition.key);
+                let index = choices
+                    .iter()
+                    .position(|choice| *choice == value)
+                    .unwrap_or(0);
+                let next = choices[(index + 1) % choices.len()];
+                self.set_profile_value(profile, definition.key, Value::from(next));
+            }
+            ProfileKind::Integer | ProfileKind::Text => {
+                let buffer = match definition.kind {
+                    ProfileKind::Integer => {
+                        profile_integer_value(&current, definition.key).to_string()
+                    }
+                    _ => profile_text_value(&current, definition.key),
+                };
+                self.mode = Mode::EditText(TextEdit {
+                    key: definition.key.to_string(),
+                    entry: None,
+                    adding: false,
+                    profile: Some((profile, field)),
+                    cursor: buffer.chars().count(),
+                    buffer,
+                });
+            }
+        }
+    }
+
+    /// Move a profile choice field, or cycle a choice left/right.
+    fn cycle_profile_choice(&mut self, profile: usize, field: usize, delta: i64) {
+        let definition = &PROFILE_FIELDS[field];
+        let ProfileKind::Choice(choices) = definition.kind else {
+            return;
+        };
+        let Some(current) = self.profile(profile) else {
+            return;
+        };
+        let value = profile_text_value(&current, definition.key);
+        let index = choices
+            .iter()
+            .position(|choice| *choice == value)
+            .unwrap_or(0) as i64;
+        let len = choices.len() as i64;
+        let next = (index + delta).rem_euclid(len) as usize;
+        self.set_profile_value(profile, definition.key, Value::from(choices[next]));
+    }
+
+    /// Write a committed profile text prompt back into the profile table.
+    fn commit_profile_edit(&mut self, profile: usize, field: usize, key: &str, buffer: &str) {
+        let definition = &PROFILE_FIELDS[field];
+        let trimmed = buffer.trim();
+        let value = match definition.kind {
+            ProfileKind::Integer => match trimmed.parse::<i64>() {
+                Ok(number) => {
+                    let (low, high) = profile_integer_range(key);
+                    if number < low || number > high {
+                        self.status = format!(
+                            "{key}: {number} is outside {low}..{high}, keeping the old value"
+                        );
+                        return;
+                    }
+                    Value::from(number)
+                }
+                Err(_) => {
+                    self.status =
+                        format!("{key}: '{buffer}' is not a number, keeping the old value");
+                    return;
+                }
+            },
+            _ => {
+                if key == "app_id"
+                    && !trimmed.is_empty()
+                    && !trimmed.chars().all(|c| c.is_ascii_digit())
+                {
+                    self.status =
+                        "app_id must be digits only (a Steam App ID), keeping the old value"
+                            .to_string();
+                    return;
+                }
+                Value::from(trimmed.to_string())
+            }
+        };
+        self.set_profile_value(profile, key, value);
+    }
+
     // ---- entries and selection ----
 
     fn entries(&self) -> Vec<Entry> {
@@ -486,8 +774,13 @@ impl Editor {
     }
 
     /// The Wayland monitor row only exists when Wayland is in use.
+    /// Profiles are stored by `-C`, so the launch options generator does not offer them.
     fn is_visible(&self, key: &str) -> bool {
-        key != "wayland_monitor" || self.wayland_active()
+        match key {
+            "wayland_monitor" => self.wayland_active(),
+            "legion_games" => !self.is_generator(),
+            _ => true,
+        }
     }
 
     /// Whether the launcher would enable Wayland on this system.
@@ -663,6 +956,17 @@ impl Editor {
             self.step_monitor(1);
             return;
         }
+        if field.key == "legion_games" {
+            // A hand-written inline array is shown by the list too, so convert it before editing.
+            if !config_file::profiles_in(&self.doc).is_empty() {
+                config_file::profile_tables_mut(&mut self.doc);
+            }
+            self.profile_selection = self
+                .profile_selection
+                .min(self.profile_count().saturating_sub(1));
+            self.mode = Mode::Profiles;
+            return;
+        }
         match self.kind(field.key) {
             Kind::Bool => {
                 let value = self.get_bool(field.key);
@@ -680,6 +984,7 @@ impl Editor {
                     key: field.key.to_string(),
                     entry: None,
                     adding: false,
+                    profile: None,
                     cursor: buffer.chars().count(),
                     buffer,
                 });
@@ -688,6 +993,7 @@ impl Editor {
                 self.mode = Mode::EditList;
                 self.list_selection = 0;
             }
+            Kind::Profiles => {}
             Kind::Text if !text_choices_for(field.key).is_empty() => {
                 let choices = text_choices_for(field.key);
                 let current = self.get_text(field.key);
@@ -699,6 +1005,7 @@ impl Editor {
                     key: field.key.to_string(),
                     entry: None,
                     adding: false,
+                    profile: None,
                     buffer: self.get_text(field.key),
                     cursor: self.get_text(field.key).chars().count(),
                 });
@@ -742,6 +1049,10 @@ impl Editor {
 
         for field in FIELDS {
             let key = field.key;
+            if key == "legion_games" {
+                // Profiles are stored data, not launch flags, and the generator hides the row.
+                continue;
+            }
             let Some(default_item) = defaults.get(key) else {
                 continue;
             };
@@ -828,6 +1139,7 @@ impl Editor {
                         ),
                     }
                 }
+                Kind::Profiles => {}
             }
         }
         (flags, notes)
@@ -886,6 +1198,14 @@ impl Editor {
             }
             Mode::EditText(_) => {
                 self.handle_edit_text(key);
+                Ok(false)
+            }
+            Mode::Profiles => {
+                self.handle_profiles(key);
+                Ok(false)
+            }
+            Mode::EditProfile { .. } => {
+                self.handle_profile_form(key);
                 Ok(false)
             }
         }
@@ -960,6 +1280,78 @@ impl Editor {
         }
     }
 
+    // ---- Legion profile screens ----
+
+    fn handle_profiles(&mut self, key: KeyEvent) {
+        let count = self.profile_count();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Form,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.profile_selection = self.profile_selection.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.profile_selection + 1 < count {
+                    self.profile_selection += 1;
+                }
+            }
+            KeyCode::Char('a') => {
+                let index = self.add_profile();
+                self.profile_selection = index;
+                self.mode = Mode::EditProfile {
+                    profile: index,
+                    field: 0,
+                };
+                self.status =
+                    "New profile: set a name and an App ID or executable, then save".to_string();
+            }
+            KeyCode::Char('d') | KeyCode::Delete if count > 0 => {
+                self.remove_profile(self.profile_selection);
+                self.profile_selection = self
+                    .profile_selection
+                    .min(self.profile_count().saturating_sub(1));
+            }
+            KeyCode::Enter | KeyCode::Char('e') if count > 0 => {
+                self.mode = Mode::EditProfile {
+                    profile: self.profile_selection,
+                    field: 0,
+                };
+            }
+            KeyCode::Char('s') => {
+                let _ = self.save();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_profile_form(&mut self, key: KeyEvent) {
+        let (profile, field) = match &self.mode {
+            Mode::EditProfile { profile, field } => (*profile, *field),
+            _ => return,
+        };
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Profiles,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.mode = Mode::EditProfile {
+                    profile,
+                    field: field.saturating_sub(1),
+                };
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.mode = Mode::EditProfile {
+                    profile,
+                    field: (field + 1).min(PROFILE_FIELDS.len() - 1),
+                };
+            }
+            KeyCode::Left => self.cycle_profile_choice(profile, field, -1),
+            KeyCode::Right => self.cycle_profile_choice(profile, field, 1),
+            KeyCode::Enter | KeyCode::Char(' ') => self.activate_profile_field(profile, field),
+            KeyCode::Char('s') => {
+                let _ = self.save();
+            }
+            _ => {}
+        }
+    }
+
     fn handle_edit_text(&mut self, key: KeyEvent) {
         let Mode::EditText(edit) = &mut self.mode else {
             return;
@@ -1003,14 +1395,17 @@ impl Editor {
             return;
         };
         let entry = edit.entry;
-        self.mode = if entry.is_some() {
+        let profile = edit.profile;
+        self.mode = if let Some((profile, field)) = profile {
+            Mode::EditProfile { profile, field }
+        } else if entry.is_some() {
             Mode::EditList
         } else {
             Mode::Form
         };
     }
 
-    /// Write the text buffer back into the document (or the edited list entry).
+    /// Write the text buffer back into the document (or the edited list entry or profile field).
     fn commit_edit(&mut self) {
         let Mode::EditText(edit) = &self.mode else {
             return;
@@ -1019,6 +1414,13 @@ impl Editor {
         let buffer = edit.buffer.clone();
         let entry = edit.entry;
         let adding = edit.adding;
+        let profile = edit.profile;
+
+        if let Some((profile, field)) = profile {
+            self.commit_profile_edit(profile, field, &key, &buffer);
+            self.mode = Mode::EditProfile { profile, field };
+            return;
+        }
 
         if let Some(index) = entry {
             let mut items = self.get_list(&key);
@@ -1093,6 +1495,7 @@ impl Editor {
                     key: field_key,
                     entry: Some(items.len()),
                     adding: true,
+                    profile: None,
                     buffer: String::new(),
                     cursor: 0,
                 });
@@ -1103,6 +1506,7 @@ impl Editor {
                         key: field_key,
                         entry: Some(self.list_selection),
                         adding: false,
+                        profile: None,
                         buffer: value.clone(),
                         cursor: value.chars().count(),
                     });
@@ -1133,7 +1537,11 @@ impl Editor {
             .split(frame.area());
 
         self.render_header(frame, chunks[0]);
-        if matches!(self.mode, Mode::EditList) {
+        if self.active_profile().is_some() {
+            self.render_profile_form(frame, chunks[1]);
+        } else if matches!(self.mode, Mode::Profiles) {
+            self.render_profiles(frame, chunks[1]);
+        } else if matches!(self.mode, Mode::EditList) {
             self.render_list_editor(frame, chunks[1]);
         } else {
             self.render_form(frame, chunks[1]);
@@ -1230,6 +1638,10 @@ impl Editor {
                     Style::new().fg(Color::Magenta),
                 )
             }
+            Kind::Profiles => Span::styled(
+                format!("[{} games]", self.profile_count()),
+                Style::new().fg(Color::Magenta),
+            ),
             Kind::Text if key == "wayland_monitor" => {
                 let monitor = self.get_text(key);
                 if monitor.is_empty() {
@@ -1307,36 +1719,134 @@ impl Editor {
         }
     }
 
+    /// The `-C` list of per-game Legion profiles.
+    fn render_profiles(&self, frame: &mut Frame, area: Rect) {
+        let profiles = config_file::profiles_in(&self.doc);
+        let title = format!("Legion KVM games ({})", profiles.len());
+        if profiles.is_empty() {
+            let text = Paragraph::new(vec![
+                Line::from("No Legion profiles yet.").bold(),
+                Line::from(
+                    "Press a to add one. A profile is also created automatically on the first Legion launch of a game.",
+                ),
+            ])
+            .block(Block::default().borders(Borders::ALL).title(title))
+            .wrap(Wrap { trim: true });
+            frame.render_widget(text, area);
+            return;
+        }
+
+        let items: Vec<ListItem> = profiles
+            .iter()
+            .map(|profile| {
+                let mut spans = vec![
+                    Span::raw(fit(&profile.display_name(), 24)),
+                    Span::styled(fit(&app_matcher(profile), 12), Style::new().dim()),
+                    Span::raw(fit(profile.exe_name(), 24)),
+                    Span::styled(
+                        format!("{:>6}", profile.memory_mib),
+                        Style::new().fg(Color::Cyan),
+                    ),
+                    Span::raw(" MiB  "),
+                    if profile.enabled {
+                        Span::styled("on", Style::new().fg(Color::Green))
+                    } else {
+                        Span::styled("off", Style::new().fg(Color::Red))
+                    },
+                ];
+                if !profile.has_matcher() {
+                    spans.push(Span::styled(
+                        "  needs app_id or exe",
+                        Style::new().fg(Color::Red),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
+
+        let mut state = ListState::default();
+        state.select(Some(self.profile_selection.min(profiles.len() - 1)));
+        let list = List::new(items)
+            .block(Block::default().borders(Borders::ALL).title(title))
+            .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+            .highlight_symbol("> ");
+        frame.render_stateful_widget(list, area, &mut state);
+    }
+
+    /// Form with the fields of one Legion profile.
+    fn render_profile_form(&self, frame: &mut Frame, area: Rect) {
+        let Some(profile) = self.active_profile().and_then(|index| self.profile(index)) else {
+            let text = Paragraph::new("This profile no longer exists. Press esc to go back.")
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Legion profile"),
+                )
+                .wrap(Wrap { trim: true });
+            frame.render_widget(text, area);
+            return;
+        };
+        let items: Vec<ListItem> = PROFILE_FIELDS
+            .iter()
+            .map(|field| {
+                ListItem::new(Line::from(vec![
+                    Span::raw(format!("{:<24}", field.label)),
+                    profile_value_span(&profile, field),
+                ]))
+            })
+            .collect();
+
+        let mut state = ListState::default();
+        state.select(Some(
+            self.profile_selected_field().min(PROFILE_FIELDS.len() - 1),
+        ));
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!("Legion profile: {}", profile.display_name())),
+            )
+            .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+            .highlight_symbol("> ");
+        frame.render_stateful_widget(list, area, &mut state);
+
+        if let Mode::EditText(edit) = &self.mode {
+            self.render_text_edit(frame, area, edit);
+        }
+    }
+
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        let field = &FIELDS[self.selected_field()];
-        let keys = match (&self.mode, self.is_generator()) {
-            (Mode::EditText(_), _) => {
+        let keys = match &self.mode {
+            Mode::EditText(_) => {
                 "enter commit   esc cancel   <-/-> move   backspace delete   ctrl+c quit without saving"
             }
-            (Mode::EditList, _) => {
+            Mode::EditList => {
                 "up/down select   enter edit   a add   d delete   esc back   ctrl+c quit without saving"
             }
-            (Mode::Form, true) => {
+            Mode::Profiles => {
+                "up/down select   enter edit   a add   d remove   s save   esc back   ctrl+c quit without saving"
+            }
+            Mode::EditProfile { .. } => {
+                "up/down select   space toggle/cycle   enter edit   s save   esc back   ctrl+c quit without saving"
+            }
+            Mode::Form if self.is_generator() => {
                 "up/down select   space toggle/cycle   enter edit   p program   s copy now   q copy and quit   ctrl+c quit without saving"
             }
-            (Mode::Form, false) => {
+            Mode::Form => {
                 "up/down select   space toggle/cycle   enter edit   s save   q quit   ctrl+c quit without saving"
             }
         };
-        let help = if field.key == "wayland_monitor" {
-            let mut text = format!("{}. Press i to list the monitors.", field.help);
-            if self.monitors.is_empty() {
-                text.push_str(" No monitors detected.");
+        let help = match &self.mode {
+            Mode::Profiles => {
+                "Profiles match a launch by Steam App ID first, then by executable file name."
+                    .to_string()
             }
-            text
-        } else if let (Kind::List, example) = (self.kind(field.key), list_example(field.key)) {
-            if example.is_empty() {
-                field.help.to_string()
-            } else {
-                format!("{} (e.g. {example})", field.help)
-            }
-        } else {
-            field.help.to_string()
+            Mode::EditProfile { field, .. } => profile_help(*field),
+            Mode::EditText(edit) => match edit.profile {
+                Some((_, field)) => profile_help(field),
+                None => self.setting_help(),
+            },
+            _ => self.setting_help(),
         };
         let mut lines = Vec::new();
         if self.is_generator() {
@@ -1357,6 +1867,26 @@ impl Editor {
             .block(Block::default().borders(Borders::ALL))
             .wrap(Wrap { trim: true });
         frame.render_widget(block, area);
+    }
+
+    /// Help for the selected top-level setting.
+    fn setting_help(&self) -> String {
+        let field = &FIELDS[self.selected_field()];
+        if field.key == "wayland_monitor" {
+            let mut text = format!("{}. Press i to list the monitors.", field.help);
+            if self.monitors.is_empty() {
+                text.push_str(" No monitors detected.");
+            }
+            text
+        } else if let (Kind::List, example) = (self.kind(field.key), list_example(field.key)) {
+            if example.is_empty() {
+                field.help.to_string()
+            } else {
+                format!("{} (e.g. {example})", field.help)
+            }
+        } else {
+            field.help.to_string()
+        }
     }
 
     fn render_confirm(&self, frame: &mut Frame) {
@@ -1395,6 +1925,127 @@ fn char_byte_index(text: &str, index: usize) -> usize {
         .nth(index)
         .map(|(i, _)| i)
         .unwrap_or(text.len())
+}
+
+// ---- Legion profile helpers ----
+
+/// Text value of one profile field, following [`GameProfile`] field names.
+fn profile_text_value(profile: &GameProfile, key: &str) -> String {
+    match key {
+        "name" => profile.name.clone(),
+        "app_id" => profile.app_id.clone(),
+        "exe" => profile.exe.clone(),
+        "render_node" => profile.render_node.clone(),
+        "startup_ui" => profile.startup_ui.clone(),
+        _ => String::new(),
+    }
+}
+
+/// Integer value of one profile field.
+fn profile_integer_value(profile: &GameProfile, key: &str) -> i64 {
+    match key {
+        "memory_mib" => i64::from(profile.memory_mib),
+        "startup_timeout_seconds" => i64::from(profile.startup_timeout_seconds),
+        _ => 0,
+    }
+}
+
+/// Boolean value of one profile field.
+fn profile_bool_value(profile: &GameProfile, key: &str) -> bool {
+    match key {
+        "enabled" => profile.enabled,
+        "fullscreen" => profile.fullscreen,
+        _ => false,
+    }
+}
+
+/// Allowed range for a profile integer field, matching Legion's documented limits.
+fn profile_integer_range(key: &str) -> (i64, i64) {
+    match key {
+        "memory_mib" => (
+            i64::from(LEGION_MEMORY_MIN_MIB),
+            i64::from(LEGION_MEMORY_MAX_MIB),
+        ),
+        "startup_timeout_seconds" => (
+            i64::from(LEGION_TIMEOUT_MIN_SECONDS),
+            i64::from(LEGION_TIMEOUT_MAX_SECONDS),
+        ),
+        _ => (0, i64::MAX),
+    }
+}
+
+/// Colored preview of a profile value.
+fn profile_value_span(profile: &GameProfile, field: &ProfileField) -> Span<'static> {
+    match field.kind {
+        ProfileKind::Bool => {
+            if profile_bool_value(profile, field.key) {
+                Span::styled("on", Style::new().fg(Color::Green))
+            } else {
+                Span::styled("off", Style::new().fg(Color::Red))
+            }
+        }
+        ProfileKind::Integer => Span::styled(
+            profile_integer_value(profile, field.key).to_string(),
+            Style::new().fg(Color::Cyan),
+        ),
+        ProfileKind::Choice(_) => Span::styled(
+            profile_text_value(profile, field.key),
+            Style::new().fg(Color::Cyan),
+        ),
+        ProfileKind::Text => {
+            let value = profile_text_value(profile, field.key);
+            if value.is_empty() {
+                let placeholder = if field.key == "render_node" {
+                    "(automatic)"
+                } else {
+                    "(empty)"
+                };
+                Span::styled(placeholder, Style::new().dim())
+            } else {
+                Span::styled(value, Style::new().fg(Color::Cyan))
+            }
+        }
+    }
+}
+
+/// Help line for a profile field, with the allowed range or choices when it has any.
+fn profile_help(field: usize) -> String {
+    let definition = &PROFILE_FIELDS[field];
+    match definition.kind {
+        ProfileKind::Choice(choices) => {
+            format!("{}. Choices: {}.", definition.help, choices.join(", "))
+        }
+        ProfileKind::Integer => {
+            let (low, high) = profile_integer_range(definition.key);
+            format!("{}, {low} to {high}", definition.help)
+        }
+        _ => definition.help.to_string(),
+    }
+}
+
+/// App ID column of the game list.
+fn app_matcher(profile: &GameProfile) -> String {
+    if profile.app_id.is_empty() {
+        "-".to_string()
+    } else {
+        format!("app {}", profile.app_id)
+    }
+}
+
+/// Pad or clip `text` to exactly `width` characters, so the game list columns line up.
+fn fit(text: &str, width: usize) -> String {
+    let count = text.chars().count();
+    if count <= width {
+        let mut fitted = text.to_string();
+        fitted.push_str(&" ".repeat(width - count));
+        fitted
+    } else if width == 0 {
+        String::new()
+    } else {
+        let mut fitted: String = text.chars().take(width - 1).collect();
+        fitted.push('~');
+        fitted
+    }
 }
 
 /// A rectangle of `width` x `height` centered in `area`.
@@ -1645,6 +2296,7 @@ mod tests {
             key: "logging_level".to_string(),
             entry: None,
             adding: false,
+            profile: None,
             buffer: "nope".to_string(),
             cursor: 4,
         });
@@ -1688,6 +2340,7 @@ mod tests {
             key: "instances".to_string(),
             entry: None,
             adding: false,
+            profile: None,
             buffer: "-2".to_string(),
             cursor: 2,
         });
@@ -2156,5 +2809,279 @@ mod tests {
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert!(editor.handle_key(ctrl_c).unwrap());
         assert!(editor.cancelled, "nothing is copied on the way out");
+    }
+
+    // ---- Legion profiles ----
+
+    /// A config editor over the default document, ready for the profile flows.
+    fn config_editor(name: &str) -> Editor {
+        let dir = std::env::temp_dir().join(format!("game_tui_prof_{name}_{}", std::process::id()));
+        Editor::new(
+            dir.join("config.toml"),
+            config_file::default_document(),
+            Vec::new(),
+            None,
+            false,
+        )
+    }
+
+    fn profile_field_index(key: &str) -> usize {
+        PROFILE_FIELDS
+            .iter()
+            .position(|field| field.key == key)
+            .unwrap_or_else(|| panic!("{key} is not a profile field"))
+    }
+
+    /// Open one profile field's text prompt with `text` in it.
+    fn edit_profile_text(editor: &mut Editor, profile: usize, key: &str, text: &str) {
+        let field = profile_field_index(key);
+        editor.mode = Mode::EditText(TextEdit {
+            key: key.to_string(),
+            entry: None,
+            adding: false,
+            profile: Some((profile, field)),
+            buffer: text.to_string(),
+            cursor: text.chars().count(),
+        });
+    }
+
+    #[test]
+    fn legion_game_list_opens_from_the_form() {
+        let mut editor = config_editor("open");
+        editor.select_key("legion_games");
+        editor.activate();
+        assert!(matches!(editor.mode, Mode::Profiles));
+    }
+
+    #[test]
+    fn opening_the_list_converts_a_hand_written_inline_array() {
+        let path =
+            std::env::temp_dir().join(format!("game_tui_prof_inline_{}.toml", std::process::id()));
+        let doc = "legion_games = [{ name = \"Inline\", app_id = \"7\" }]\n"
+            .parse::<DocumentMut>()
+            .unwrap();
+        let mut editor = Editor::new(path, doc, Vec::new(), None, false);
+        editor.select_key("legion_games");
+        assert_eq!(editor.profile_count(), 1, "the list counts inline entries");
+
+        editor.activate();
+
+        assert!(matches!(editor.mode, Mode::Profiles));
+        assert_eq!(editor.profile_count(), 1);
+        assert!(
+            editor.doc.to_string().contains("[[legion_games]]"),
+            "editing uses the array-of-tables form: {}",
+            editor.doc
+        );
+        assert_eq!(editor.profile(0).unwrap().name, "Inline");
+    }
+
+    #[test]
+    fn the_generator_hides_the_profile_editor() {
+        let editor = generator("noprofiles");
+        assert!(
+            !editor.visible_keys().contains(&"legion_games"),
+            "profiles cannot be expressed as launch flags"
+        );
+        assert!(editor.visible_keys().contains(&"legion"));
+    }
+
+    #[test]
+    fn adding_a_profile_appends_it_and_opens_the_name_field() {
+        let mut editor = config_editor("add");
+        editor.select_key("legion_games");
+        editor.activate();
+
+        editor.handle_profiles(KeyEvent::from(KeyCode::Char('a')));
+
+        assert!(matches!(
+            editor.mode,
+            Mode::EditProfile {
+                profile: 0,
+                field: 0
+            }
+        ));
+        assert_eq!(editor.profile_count(), 1);
+        assert!(editor.dirty);
+        let profile = editor.profile(0).expect("profile exists");
+        assert_eq!(profile.name, "New Legion game");
+        assert_eq!(profile.memory_mib, 12288);
+        assert_eq!(profile.startup_timeout_seconds, 180);
+        assert_eq!(profile.startup_ui, "auto");
+        assert!(profile.enabled);
+        assert!(!profile.has_matcher());
+    }
+
+    #[test]
+    fn saving_a_profile_writes_an_array_of_tables_and_keeps_comments() {
+        let dir = std::env::temp_dir().join(format!("game_tui_profsave_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let mut editor = Editor::new(
+            path.clone(),
+            config_file::default_document(),
+            Vec::new(),
+            None,
+            false,
+        );
+
+        editor.select_key("legion_games");
+        editor.activate();
+        editor.handle_profiles(KeyEvent::from(KeyCode::Char('a')));
+        edit_profile_text(&mut editor, 0, "name", "Example");
+        editor.commit_edit();
+        edit_profile_text(&mut editor, 0, "app_id", "123456");
+        editor.commit_edit();
+        edit_profile_text(&mut editor, 0, "exe", "/games/Example/game.exe");
+        editor.commit_edit();
+        edit_profile_text(&mut editor, 0, "memory_mib", "16384");
+        editor.commit_edit();
+
+        editor.save().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[[legion_games]]"), "{text}");
+        assert!(
+            text.contains("# Per-game Legion profiles"),
+            "the template comments survive: {text}"
+        );
+
+        let cfg: config_file::FileConfig = toml::from_str(&text).unwrap();
+        let games = cfg.legion_games.expect("profiles parse");
+        assert_eq!(games.len(), 1);
+        assert_eq!(games[0].name, "Example");
+        assert_eq!(games[0].app_id, "123456");
+        assert_eq!(games[0].exe, "/games/Example/game.exe");
+        assert_eq!(games[0].memory_mib, 16384);
+        assert!(games[0].enabled);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn profile_booleans_and_choices_cycle_in_the_form() {
+        let mut editor = config_editor("toggle");
+        editor.select_key("legion_games");
+        editor.activate();
+        editor.handle_profiles(KeyEvent::from(KeyCode::Char('a')));
+
+        let enabled = profile_field_index("enabled");
+        editor.mode = Mode::EditProfile {
+            profile: 0,
+            field: enabled,
+        };
+        editor.handle_profile_form(KeyEvent::from(KeyCode::Enter));
+        assert!(
+            !editor.profile(0).unwrap().enabled,
+            "enter turns the profile off"
+        );
+        editor.handle_profile_form(KeyEvent::from(KeyCode::Char(' ')));
+        assert!(editor.profile(0).unwrap().enabled, "space toggles it back");
+
+        let startup_ui = profile_field_index("startup_ui");
+        editor.mode = Mode::EditProfile {
+            profile: 0,
+            field: startup_ui,
+        };
+        assert_eq!(editor.profile(0).unwrap().startup_ui, "auto");
+        editor.handle_profile_form(KeyEvent::from(KeyCode::Right));
+        assert_eq!(editor.profile(0).unwrap().startup_ui, "window");
+        editor.handle_profile_form(KeyEvent::from(KeyCode::Left));
+        assert_eq!(editor.profile(0).unwrap().startup_ui, "auto");
+    }
+
+    #[test]
+    fn profile_integer_edits_reject_values_outside_legions_range() {
+        let mut editor = config_editor("memory");
+        editor.add_profile();
+
+        edit_profile_text(&mut editor, 0, "memory_mib", "1024");
+        editor.commit_edit();
+        assert_eq!(editor.profile(0).unwrap().memory_mib, 12288);
+        assert!(editor.status.contains("outside"), "{}", editor.status);
+
+        edit_profile_text(&mut editor, 0, "memory_mib", "65536");
+        editor.commit_edit();
+        assert_eq!(editor.profile(0).unwrap().memory_mib, 65536);
+
+        edit_profile_text(&mut editor, 0, "startup_timeout_seconds", "10");
+        editor.commit_edit();
+        assert_eq!(editor.profile(0).unwrap().startup_timeout_seconds, 180);
+        assert!(editor.status.contains("outside"), "{}", editor.status);
+    }
+
+    #[test]
+    fn profile_app_id_accepts_digits_only() {
+        let mut editor = config_editor("appid");
+        editor.add_profile();
+
+        edit_profile_text(&mut editor, 0, "app_id", "steam");
+        editor.commit_edit();
+        assert_eq!(editor.profile(0).unwrap().app_id, "");
+        assert!(editor.status.contains("digits"), "{}", editor.status);
+
+        edit_profile_text(&mut editor, 0, "app_id", " 42 ");
+        editor.commit_edit();
+        assert_eq!(editor.profile(0).unwrap().app_id, "42", "trimmed");
+    }
+
+    #[test]
+    fn cancelling_a_profile_field_returns_to_the_profile_form() {
+        let mut editor = config_editor("cancel");
+        editor.add_profile();
+        editor.dirty = false;
+
+        edit_profile_text(&mut editor, 0, "name", "not committed");
+        editor.handle_edit_text(KeyEvent::from(KeyCode::Esc));
+
+        assert!(matches!(
+            editor.mode,
+            Mode::EditProfile {
+                profile: 0,
+                field: 0
+            }
+        ));
+        assert_eq!(editor.profile(0).unwrap().name, "New Legion game");
+        assert!(!editor.dirty, "cancelling does not dirty the document");
+    }
+
+    #[test]
+    fn escaping_the_profile_form_returns_to_the_game_list() {
+        let mut editor = config_editor("back");
+        editor.select_key("legion_games");
+        editor.activate();
+        editor.handle_profiles(KeyEvent::from(KeyCode::Char('a')));
+        editor.handle_profile_form(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(editor.mode, Mode::Profiles));
+    }
+
+    #[test]
+    fn removing_the_last_profile_restores_the_empty_array() {
+        let mut editor = config_editor("remove");
+        editor.add_profile();
+        editor.mode = Mode::Profiles;
+
+        editor.handle_profiles(KeyEvent::from(KeyCode::Char('d')));
+
+        assert_eq!(editor.profile_count(), 0);
+        assert!(editor.dirty);
+        assert!(
+            editor.doc.to_string().contains("legion_games = []"),
+            "{}",
+            editor.doc
+        );
+    }
+
+    #[test]
+    fn profile_list_selection_stays_in_bounds() {
+        let mut editor = config_editor("bounds");
+        editor.add_profile();
+        editor.add_profile();
+        editor.mode = Mode::Profiles;
+        editor.profile_selection = 1;
+
+        editor.handle_profiles(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(editor.profile_count(), 1);
+        assert_eq!(editor.profile_selection, 0, "selection clamps to the list");
     }
 }

@@ -9,9 +9,13 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use toml_edit::DocumentMut;
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
-use crate::config::{make_export, App};
+use crate::config::{
+    make_export, App, GameProfile, LEGION_MEMORY_DEFAULT_MIB, LEGION_MEMORY_MAX_MIB,
+    LEGION_MEMORY_MIN_MIB, LEGION_TIMEOUT_DEFAULT_SECONDS, LEGION_TIMEOUT_MAX_SECONDS,
+    LEGION_TIMEOUT_MIN_SECONDS,
+};
 
 /// Directory holding the launcher's own files: `~/.config/game-launcher`.
 pub fn config_dir() -> Option<PathBuf> {
@@ -122,6 +126,30 @@ wayland_default = "auto"
 # This sets WAYLANDDRV_PRIMARY_MONITOR and is only applied when Wayland is enabled (see wayland_force_enable above). -M sets it, or pick one from the detected monitors with -C.
 wayland_monitor = ""
 
+# --- Legion KVM (experimental) ---
+
+# Run Proton games inside Legion's KVM virtual machine. -K enables it for one launch.
+# Requires /dev/kvm, a Wayland host session, a Vulkan driver and the bundled legion binary.
+legion = false
+
+# Legion executable. Empty means next to the game binary, then PATH, ~/.local/bin/legion, /usr/local/bin/legion.
+legion_path = ""
+
+# Per-game Legion profiles. -C opens the list; a profile is also created automatically on the first Legion launch of a game.
+# Profiles are matched by Steam App ID first, then by executable file name, so the same game works from Steam and from a direct .exe launch.
+# Example:
+# [[legion_games]]
+# name = "My game"
+# app_id = "123456"
+# exe = "game.exe"
+# enabled = true
+# memory_mib = 12288
+# render_node = ""
+# fullscreen = false
+# startup_ui = "auto"
+# startup_timeout_seconds = 180
+legion_games = []
+
 # --- Lists (command-line flags append to these) ---
 
 # Extra DLL overrides, one entry per override, e.g. ["dinput8=n,b", "dxgi=n,b"]. -d.
@@ -170,9 +198,59 @@ pub struct FileConfig {
     pub wayland_default: Option<String>,
     pub wayland_monitor: Option<String>,
 
+    pub legion: Option<bool>,
+    pub legion_path: Option<String>,
+    pub legion_games: Option<Vec<GameProfile>>,
+
     pub dll_overrides: Option<Vec<String>>,
     pub mods: Option<Vec<String>>,
     pub exports: Option<Vec<String>>,
+}
+
+/// Sanitize a profile from the config file.
+///
+/// Out of range Legion values would make the launch fail later, so they are replaced with defaults and reported here instead.
+fn validate_profile(profile: &GameProfile, notes: &mut Vec<String>) -> GameProfile {
+    let mut profile = profile.clone();
+    let label = profile.display_name();
+    profile.name = profile.name.trim().to_string();
+    profile.app_id = profile.app_id.trim().to_string();
+    profile.exe = profile.exe.trim().to_string();
+    profile.render_node = profile.render_node.trim().to_string();
+
+    if !profile.app_id.is_empty() && !profile.app_id.chars().all(|c| c.is_ascii_digit()) {
+        notes.push(format!(
+            "Config: Legion profile {label:?} has a non-numeric app_id; ignoring the app_id matcher"
+        ));
+        profile.app_id.clear();
+    }
+    if !(LEGION_MEMORY_MIN_MIB..=LEGION_MEMORY_MAX_MIB).contains(&profile.memory_mib) {
+        notes.push(format!(
+            "Config: Legion profile {label:?} has memory_mib {} outside {LEGION_MEMORY_MIN_MIB}..{LEGION_MEMORY_MAX_MIB}; using {LEGION_MEMORY_DEFAULT_MIB}",
+            profile.memory_mib
+        ));
+        profile.memory_mib = LEGION_MEMORY_DEFAULT_MIB;
+    }
+    if !(LEGION_TIMEOUT_MIN_SECONDS..=LEGION_TIMEOUT_MAX_SECONDS)
+        .contains(&profile.startup_timeout_seconds)
+    {
+        notes.push(format!(
+            "Config: Legion profile {label:?} has startup_timeout_seconds {} outside {LEGION_TIMEOUT_MIN_SECONDS}..{LEGION_TIMEOUT_MAX_SECONDS}; using {LEGION_TIMEOUT_DEFAULT_SECONDS}",
+            profile.startup_timeout_seconds
+        ));
+        profile.startup_timeout_seconds = LEGION_TIMEOUT_DEFAULT_SECONDS;
+    }
+    if !matches!(
+        profile.startup_ui.as_str(),
+        "auto" | "window" | "log" | "off"
+    ) {
+        notes.push(format!(
+            "Config: Legion profile {label:?} has startup_ui {:?} (expected auto, window, log or off); using auto",
+            profile.startup_ui
+        ));
+        profile.startup_ui = "auto".to_string();
+    }
+    profile
 }
 
 /// Copy the set values of `cfg` onto `app`, returning notes for the log.
@@ -232,6 +310,18 @@ fn apply(cfg: &FileConfig, app: &mut App) -> Vec<String> {
     }
     if let Some(v) = &cfg.wayland_monitor {
         app.wayland_monitor = v.clone();
+    }
+    if let Some(v) = cfg.legion {
+        app.legion = v;
+    }
+    if let Some(v) = &cfg.legion_path {
+        app.legion_path = v.trim().to_string();
+    }
+    if let Some(games) = &cfg.legion_games {
+        app.legion_games = games
+            .iter()
+            .map(|game| validate_profile(game, &mut notes))
+            .collect();
     }
     if let Some(list) = &cfg.dll_overrides {
         app.winedlloverrides_list = list.clone();
@@ -424,6 +514,174 @@ pub fn save_document(doc: &DocumentMut, path: &Path) -> Result<(), String> {
             permission_hint(&e, path)
         )
     })
+}
+
+/// TOML table for one Legion profile, with a stable field order.
+pub fn profile_table(profile: &GameProfile) -> Table {
+    let mut table = Table::new();
+    table.insert("name", Item::Value(Value::from(profile.name.clone())));
+    table.insert("app_id", Item::Value(Value::from(profile.app_id.clone())));
+    table.insert("exe", Item::Value(Value::from(profile.exe.clone())));
+    table.insert("enabled", Item::Value(Value::from(profile.enabled)));
+    table.insert(
+        "memory_mib",
+        Item::Value(Value::from(i64::from(profile.memory_mib))),
+    );
+    table.insert(
+        "render_node",
+        Item::Value(Value::from(profile.render_node.clone())),
+    );
+    table.insert("fullscreen", Item::Value(Value::from(profile.fullscreen)));
+    table.insert(
+        "startup_ui",
+        Item::Value(Value::from(profile.startup_ui.clone())),
+    );
+    table.insert(
+        "startup_timeout_seconds",
+        Item::Value(Value::from(i64::from(profile.startup_timeout_seconds))),
+    );
+    table
+}
+
+/// Read one profile table, filling in defaults for keys the user left out.
+///
+/// Hand written configs may use a minimal `[[legion_games]]` entry, and the editor shows the same defaults the launcher would apply.
+pub fn profile_from_table(table: &Table) -> GameProfile {
+    let mut profile = GameProfile::default();
+    if let Some(value) = table.get("name").and_then(Item::as_str) {
+        profile.name = value.to_string();
+    }
+    if let Some(value) = table.get("app_id").and_then(Item::as_str) {
+        profile.app_id = value.to_string();
+    }
+    if let Some(value) = table.get("exe").and_then(Item::as_str) {
+        profile.exe = value.to_string();
+    }
+    if let Some(value) = table.get("enabled").and_then(Item::as_bool) {
+        profile.enabled = value;
+    }
+    if let Some(value) = table.get("memory_mib").and_then(Item::as_integer) {
+        profile.memory_mib = u32::try_from(value).unwrap_or(profile.memory_mib);
+    }
+    if let Some(value) = table.get("render_node").and_then(Item::as_str) {
+        profile.render_node = value.to_string();
+    }
+    if let Some(value) = table.get("fullscreen").and_then(Item::as_bool) {
+        profile.fullscreen = value;
+    }
+    if let Some(value) = table.get("startup_ui").and_then(Item::as_str) {
+        profile.startup_ui = value.to_string();
+    }
+    if let Some(value) = table
+        .get("startup_timeout_seconds")
+        .and_then(Item::as_integer)
+    {
+        profile.startup_timeout_seconds =
+            u32::try_from(value).unwrap_or(profile.startup_timeout_seconds);
+    }
+    profile
+}
+
+/// Every profile in a document, with defaults filled in.
+///
+/// Both the `[[legion_games]]` form written by `-C` and a hand written inline array are read.
+pub fn profiles_in(doc: &DocumentMut) -> Vec<GameProfile> {
+    match doc.get("legion_games") {
+        Some(Item::ArrayOfTables(tables)) => tables.iter().map(profile_from_table).collect(),
+        Some(Item::Value(Value::Array(array))) => array
+            .iter()
+            .filter_map(Value::as_inline_table)
+            .map(|inline| profile_from_table(&inline.clone().into_table()))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Mutable `[[legion_games]]` table, converting the default empty array on first use.
+///
+/// The value is replaced in place so the key keeps its comments, and an inline array is converted rather than dropped.
+pub fn profile_tables_mut(doc: &mut DocumentMut) -> &mut ArrayOfTables {
+    if !doc
+        .get("legion_games")
+        .is_some_and(Item::is_array_of_tables)
+    {
+        let mut converted = ArrayOfTables::new();
+        if let Some(array) = doc.get("legion_games").and_then(Item::as_array) {
+            for value in array {
+                if let Some(inline) = value.as_inline_table() {
+                    converted.push(inline.clone().into_table());
+                }
+            }
+        }
+        match doc.as_table_mut().get_key_value_mut("legion_games") {
+            Some((mut key, item)) => {
+                // The array syntax puts a space before `=`; an array of tables must not keep it before `]]`.
+                key.leaf_decor_mut().set_suffix("");
+                *item = Item::ArrayOfTables(converted);
+            }
+            None => {
+                doc.as_table_mut()
+                    .insert("legion_games", Item::ArrayOfTables(converted));
+            }
+        }
+    }
+    doc.get_mut("legion_games")
+        .and_then(Item::as_array_of_tables_mut)
+        .expect("legion_games was just made an array of tables")
+}
+
+/// Append a profile, keeping the comments attached to `legion_games`.
+pub fn push_profile(doc: &mut DocumentMut, profile: &GameProfile) -> usize {
+    let tables = profile_tables_mut(doc);
+    tables.push(profile_table(profile));
+    tables.len() - 1
+}
+
+/// Set one field of a profile table, keeping the comments around the value.
+pub fn set_profile_field(table: &mut Table, key: &str, new: Value) {
+    match table.get_mut(key).and_then(Item::as_value_mut) {
+        Some(value) => {
+            let decor = value.decor().clone();
+            *value = new;
+            *value.decor_mut() = decor;
+        }
+        None => {
+            table.insert(key, Item::Value(new));
+        }
+    }
+}
+
+/// Put `legion_games` back to the empty array the default config uses.
+pub fn clear_profiles(doc: &mut DocumentMut) {
+    doc["legion_games"] = Item::Value(Value::Array(Array::new()));
+    // An array keeps the spacing around `=` that the array-of-tables form drops.
+    if let Some(mut key) = doc.as_table_mut().key_mut("legion_games") {
+        key.leaf_decor_mut().set_suffix(" ");
+    }
+}
+
+/// Append a generated profile to the config file, keeping comments and formatting.
+///
+/// Used for the automatic profile created on the first Legion launch of a game.
+pub fn add_profile(profile: &GameProfile) -> Result<(), String> {
+    let path = config_path().ok_or("could not resolve a config directory")?;
+    append_profile_at(&path, profile)
+}
+
+/// [`add_profile`] for an explicit path.
+///
+/// A config that exists but cannot be parsed is left alone instead of being replaced with defaults, so a broken file never loses the user's settings.
+fn append_profile_at(path: &Path, profile: &GameProfile) -> Result<(), String> {
+    let mut doc = if path.is_file() {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        text.parse::<DocumentMut>()
+            .map_err(|e| format!("{} could not be parsed: {e}", path.display()))?
+    } else {
+        default_document()
+    };
+    push_profile(&mut doc, profile);
+    save_document(&doc, path)
 }
 
 #[cfg(test)]
@@ -621,5 +879,129 @@ mod tests {
         assert_eq!(cfg.mangohud, Some(false));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generated_profiles_append_without_overwriting_a_broken_config() {
+        let dir = scratch("append_profile");
+        let path = dir.join("config.toml");
+        let profile = GameProfile {
+            name: "Generated".to_string(),
+            ..GameProfile::default()
+        };
+
+        append_profile_at(&path, &profile).unwrap();
+        let (doc, warning) = load_document(&path);
+        assert!(warning.is_none());
+        assert_eq!(profiles_in(&doc), vec![profile]);
+
+        std::fs::write(&path, "this is not toml").unwrap();
+        assert!(append_profile_at(&path, &GameProfile::default()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "this is not toml",
+            "a config that cannot be parsed is never replaced"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn minimal_profile_entries_get_the_struct_defaults() {
+        let cfg: FileConfig =
+            toml::from_str("[[legion_games]]\nname = \"Minimal\"\napp_id = \"42\"\n").unwrap();
+        let mut app = App::default();
+        apply(&cfg, &mut app);
+
+        assert_eq!(app.legion_games.len(), 1);
+        let profile = &app.legion_games[0];
+        assert_eq!(profile.name, "Minimal");
+        assert_eq!(profile.app_id, "42");
+        assert!(profile.enabled);
+        assert_eq!(profile.memory_mib, 12288);
+        assert_eq!(profile.startup_ui, "auto");
+        assert_eq!(profile.startup_timeout_seconds, 180);
+    }
+
+    #[test]
+    fn profile_tables_round_trip_and_extend_the_empty_array() {
+        let mut doc = default_document();
+        let profile = GameProfile {
+            name: "Round trip".to_string(),
+            app_id: "123".to_string(),
+            exe: "/games/Round/game.exe".to_string(),
+            enabled: false,
+            memory_mib: 16384,
+            render_node: "/dev/dri/renderD128".to_string(),
+            fullscreen: true,
+            startup_ui: "log".to_string(),
+            startup_timeout_seconds: 300,
+        };
+        assert_eq!(push_profile(&mut doc, &profile), 0);
+
+        assert_eq!(profiles_in(&doc), vec![profile]);
+        let rendered = doc.to_string();
+        assert!(rendered.contains("[[legion_games]]"));
+        assert!(
+            rendered.contains("# Per-game Legion profiles"),
+            "the template comments stay with the setting: {rendered}"
+        );
+
+        clear_profiles(&mut doc);
+        assert!(profiles_in(&doc).is_empty());
+        let rendered = doc.to_string();
+        assert!(rendered.contains("legion_games = []"));
+        assert!(
+            rendered.contains("# Per-game Legion profiles"),
+            "removing the last profile keeps the template comments: {rendered}"
+        );
+    }
+
+    #[test]
+    fn inline_profile_arrays_are_read_and_converted_without_losing_entries() {
+        let mut doc = "legion_games = [{ name = \"Inline\", app_id = \"7\" }]\n"
+            .parse::<DocumentMut>()
+            .unwrap();
+        let profiles = profiles_in(&doc);
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].name, "Inline");
+        assert_eq!(profiles[0].app_id, "7");
+
+        assert_eq!(push_profile(&mut doc, &GameProfile::default()), 1);
+
+        let rendered = doc.to_string();
+        assert!(rendered.contains("[[legion_games]]"), "{rendered}");
+        let names: Vec<String> = profiles_in(&doc)
+            .into_iter()
+            .map(|profile| profile.name)
+            .collect();
+        assert_eq!(names, vec!["Inline".to_string(), String::new()]);
+    }
+
+    #[test]
+    fn profile_validation_reports_and_corrects_bad_values() {
+        let cfg: FileConfig = toml::from_str(
+            r#"
+[[legion_games]]
+name = "Bad"
+app_id = "abc"
+memory_mib = 1024
+startup_ui = "sometimes"
+startup_timeout_seconds = 5
+"#,
+        )
+        .unwrap();
+        let mut app = App::default();
+        let notes = apply(&cfg, &mut app);
+
+        let profile = &app.legion_games[0];
+        assert_eq!(
+            profile.app_id, "",
+            "a non-numeric App ID matcher is dropped"
+        );
+        assert_eq!(profile.memory_mib, 12288);
+        assert_eq!(profile.startup_ui, "auto");
+        assert_eq!(profile.startup_timeout_seconds, 180);
+        assert_eq!(notes.len(), 4, "one note per corrected value: {notes:?}");
     }
 }

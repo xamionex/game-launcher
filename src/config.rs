@@ -1,11 +1,24 @@
 //! Configuration defaults and shared runtime state.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use serde::Deserialize;
 
 /// Number of plain `.log` files kept per game folder; older ones are archived to `.tar.gz` on the next launch.
 pub const MAX_LOGS: usize = 3;
 /// tmpfs mount point used for RAM-disk loading.
 pub const RAM_MOUNT: &str = "/mnt/gameram";
+
+/// Smallest and largest guest memory Legion accepts, in MiB.
+pub const LEGION_MEMORY_MIN_MIB: u32 = 4096;
+pub const LEGION_MEMORY_MAX_MIB: u32 = 65536;
+/// Guest memory used when a profile has no usable value.
+pub const LEGION_MEMORY_DEFAULT_MIB: u32 = 12288;
+/// Smallest and largest first-frame timeout Legion accepts, in seconds.
+pub const LEGION_TIMEOUT_MIN_SECONDS: u32 = 30;
+pub const LEGION_TIMEOUT_MAX_SECONDS: u32 = 900;
+/// First-frame timeout used when a profile has no usable value.
+pub const LEGION_TIMEOUT_DEFAULT_SECONDS: u32 = 180;
 
 /// DLL overrides applied when `-o` (OnlineFix) is enabled.
 pub const ONLINEFIX_DLLS: &[&str] = &[
@@ -51,6 +64,83 @@ pub fn make_export(assignment: &str) -> CustomExport {
     }
 }
 
+/// A per-game Legion KVM profile.
+///
+/// Profiles are matched by Steam App ID first, then by executable file name, so the same game works from Steam and from a direct `.exe` launch.
+/// Every field has a usable default, which lets users write a minimal `[[legion_games]]` entry and lets the launcher generate one on first use.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct GameProfile {
+    /// Human readable label shown by `-C`.
+    pub name: String,
+    /// Steam App ID matcher. Empty means the executable matcher is used.
+    pub app_id: String,
+    /// Executable file name matcher, for example `game.exe`. A path is accepted and reduced to its file name when matching.
+    pub exe: String,
+    /// Whether this profile runs the game in Legion.
+    pub enabled: bool,
+    /// `LEGION_MEMORY_MIB`; Legion accepts 4096 through 65536.
+    pub memory_mib: u32,
+    /// `LEGION_RENDER_NODE`; empty leaves the environment and Legion's automatic selection alone.
+    pub render_node: String,
+    /// `LEGION_FULLSCREEN=1` when true.
+    pub fullscreen: bool,
+    /// `LEGION_STARTUP_UI`: auto, window, log or off.
+    pub startup_ui: String,
+    /// `LEGION_STARTUP_TIMEOUT_SECONDS`; Legion accepts 30 through 900.
+    pub startup_timeout_seconds: u32,
+}
+
+impl Default for GameProfile {
+    fn default() -> Self {
+        GameProfile {
+            name: String::new(),
+            app_id: String::new(),
+            exe: String::new(),
+            enabled: true,
+            memory_mib: LEGION_MEMORY_DEFAULT_MIB,
+            render_node: String::new(),
+            fullscreen: false,
+            startup_ui: "auto".to_string(),
+            startup_timeout_seconds: LEGION_TIMEOUT_DEFAULT_SECONDS,
+        }
+    }
+}
+
+impl GameProfile {
+    /// True when the profile has at least one matcher and can apply automatically.
+    pub fn has_matcher(&self) -> bool {
+        !self.app_id.trim().is_empty() || !self.exe.trim().is_empty()
+    }
+
+    /// Executable file name only, dropping any directory part.
+    pub fn exe_name(&self) -> &str {
+        file_name(&self.exe)
+    }
+
+    /// A label for logs and notifications.
+    pub fn display_name(&self) -> String {
+        if !self.name.trim().is_empty() {
+            return self.name.trim().to_string();
+        }
+        if !self.exe.trim().is_empty() {
+            return file_name(&self.exe).to_string();
+        }
+        if !self.app_id.trim().is_empty() {
+            return format!("Steam {}", self.app_id.trim());
+        }
+        "unnamed Legion profile".to_string()
+    }
+}
+
+/// File name part of a path, or the input unchanged when it has no separator.
+pub(crate) fn file_name(path: &str) -> &str {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+}
+
 /// Parsed flags plus runtime state, threaded through the launch pipeline.
 ///
 /// `PartialEq` is derived so tests can assert that the config file defaults
@@ -86,6 +176,16 @@ pub struct App {
     pub hypervisor: bool,
     /// Swap the game's `EOSSDK-Win64-Shipping.dll` for the EOS proxy (the `-E` flag).
     pub eos_proxy: bool,
+
+    // === Legion KVM ===
+    /// Run Proton games inside Legion's virtual machine (the `-K` flag, or `legion = true` in the config).
+    pub legion: bool,
+    /// Legion executable path. Empty means next to the running `game` binary, then `PATH`.
+    pub legion_path: String,
+    /// True when `-K` was passed, which makes the command line win over a profile's `enabled` flag.
+    pub legion_explicit: bool,
+    /// Per-game profiles parsed from `[[legion_games]]`.
+    pub legion_games: Vec<GameProfile>,
 
     /// Open the interactive config editor and exit (the `-C` flag).
     /// Not a config file setting; it is a command-line action.
@@ -126,6 +226,14 @@ pub struct App {
     pub mod_pids: Vec<u32>,
     pub game_dir_orig: Option<String>,
     pub game_dir_ram: Option<String>,
+
+    // === Legion runtime state ===
+    /// Resolved Legion executable, set before the launch.
+    pub legion_binary: PathBuf,
+    /// Index of the profile that matched or was generated for this launch.
+    pub legion_profile: Option<usize>,
+    /// Legion session directories that existed before this launch, so the new one can be found afterwards.
+    pub legion_sessions_before: Vec<PathBuf>,
 }
 
 impl Default for App {
@@ -153,6 +261,11 @@ impl Default for App {
             hypervisor_modules: false,
             hypervisor: false,
             eos_proxy: false,
+
+            legion: false,
+            legion_path: String::new(),
+            legion_explicit: false,
+            legion_games: Vec::new(),
 
             config_tui: false,
             generator_tui: false,
@@ -182,6 +295,10 @@ impl Default for App {
             mod_pids: Vec::new(),
             game_dir_orig: None,
             game_dir_ram: None,
+
+            legion_binary: PathBuf::new(),
+            legion_profile: None,
+            legion_sessions_before: Vec::new(),
         }
     }
 }

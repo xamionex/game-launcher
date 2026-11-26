@@ -8,7 +8,7 @@ Sets a curated set of Proton/DXVK/VKD3D environment variables (src/wrappers.rs),
 Chooses Wayland or X11 from `wayland_default` in the config (by default: NVIDIA uses Wayland, everything else is x11), \
 and writes structured per game logs to `~/logs/game`.
 
-Optionally: launches background mods.
+Optionally: launches background mods, and runs Proton games inside [Legion KVM](#legion-kvm--k) when `-K` or a per-game profile enables it.
 
 Defaults for the tools come from `~/.config/game-launcher/config.toml`, \
 written on first run; command line flags override it. See [Configuration](#configuration).
@@ -25,9 +25,10 @@ This sets `WAYLANDDRV_PRIMARY_MONITOR` and only applies while Wayland is enabled
 ## Automatic Install
 
 The preferred way to install is the curl installer. \
-It downloads the latest release binary, \
+It downloads the latest release binaries, installs `game` and (unless `--no-legion` is given) `legion` next to each other, \
 installs the dxvk config to `~/.config/dxvk/dxvk.conf` \
 and refreshes the payload cache in `~/.config/game-launcher/payloads`.
+Both binaries are downloaded and checked for a valid ELF header before either is installed, so a missing or broken asset leaves the existing install untouched.
 
 Root install (preferred):
 
@@ -35,7 +36,7 @@ Root install (preferred):
 curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh
 ```
 
-Installs `game` to `/usr/local/bin/game`. \
+Installs `game` and `legion` to `/usr/local/bin`. \
 This is the recommended way to install, because Steam Deck gaming mode (the gamescope session) does not source your shell profiles, \
 so `~/.local/bin` won't be in `PATH` and Steam will fail to find the `game` binary. \
 With the root install you can use `game -- %command%` in Launch Options without specifying the entire path.
@@ -46,13 +47,25 @@ User install:
 curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --user
 ```
 
-Installs `game` to `~/.local/bin/game`. Make sure `~/.local/bin` is on your `PATH`. \
+Installs `game` and `legion` to `~/.local/bin`. Make sure `~/.local/bin` is on your `PATH`. \
 Gaming mode may not find it, prefer the root install.
+
+To install only `game`, pass `--no-legion`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --no-legion
+```
+
+Legion KVM is licensed under AGPL-3.0-only and runs as a separate program, so its license, notice and source location are published with each release. \
+The installer prints the pinned source URL, and `legion --version` reports the build. \
+The release is built from [github.com/brcly/legion-kvm](https://github.com/brcly/legion-kvm) at commit `0197712f1a12ce70411d575b33306349c7b19c37`.
 
 An installed copy updates itself with `game -U`. \
 It reports the version it is running, compares it with the newest release, and then runs this same installer for the copy that is running: \
 the root install when it started from `/usr/local/bin`, the user install when it started from `~/.local/bin`, and otherwise whichever of the two is installed (the root install, the README's preferred way, when neither is). \
 A build that is newer than the newest release is left alone, so a development build is not downgraded.
+
+`-U` runs the installer without `--no-legion`, so it updates `legion` together with `game`.
 
 When both `/usr/local/bin/game` and `~/.local/bin/game` exist, the installer reports the other copy and asks whether to remove it, since `PATH` order decides which one runs. \
 Answer n to keep it, and make sure the directory of the install you want comes first in `PATH`.
@@ -80,6 +93,9 @@ symlink for dxvk as well:
 ```
 ln -s $PWD/dxvk ~/.config/dxvk
 ```
+
+`cargo build` only produces `game`. \
+For `-K`, install Legion with the [curl installer](#automatic-install), put a packaged `legion` next to the `game` binary, put it on `PATH`, or set `legion_path` in the config.
 
 netsock and the hypervisor loader (LinUwUx.so) are embedded in the binary and self-extract on first use, no setup needed. \
 netsock goes to `$HOME/.config/SLSsteam/tools/netsock/` and the hypervisor to `$HOME/.local/share/linuwux/`. \
@@ -164,6 +180,7 @@ Disabled by default (use the flag to enable):
 | `-h` | Hypervisor kernel modules: unload KVM (killing any running virtual machines), load `cpuid_fault_emulation` before the game, and restore the previous module state when it exits, as root |
 | `-v` | Enable hypervisor loader: `LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so` and `PROTON_DISABLE_LSTEAMCLIENT=0` (self-extracts if missing)                                              |
 | `-E` | Enable EOS-Proxy: replaces the game's `EOSSDK-Win64-Shipping.dll` with the proxy, skipped when the game is already patched                                                               |
+| `-K` | Run a Proton game inside Legion KVM for this launch, overriding a profile's `enabled = false`; errors on a native Linux game                                                            |
 
 Valued flags:
 
@@ -209,6 +226,83 @@ or when ananicy-cpp is running, since both renice processes themselves.
 
 `-h` is independent of `-v`: `-h` only touches the kernel modules, `-v` only puts the LinuwUx loader in `LD_PRELOAD`, so setups with their own module handling can use `-v` alone.
 
+## Legion KVM (`-K`)
+
+Legion runs Windows applications through Proton inside a Linux KVM guest, using Mesa Venus over virtio-GPU. \
+`-K` enables it for one launch and overrides a matching profile's `enabled = false`; without `-K`, a matching profile decides and `legion = true` in the config enables it for games that have no profile. \
+A native Linux game cannot be wrapped: `-K` stops with an error instead of silently running it on the host, while a profile-driven Legion launch falls back to the host with a log line.
+
+Requirements:
+
+- access to `/dev/kvm` and your GPU render node,
+- a Wayland desktop session,
+- a host Vulkan driver with the external-memory and synchronization capabilities Venus needs; an AMD kernel driver alone is not enough,
+- the `legion` binary, which the [installer](#automatic-install) puts next to `game`.
+
+`LEGION_RENDER_NODE` can select a render node such as `/dev/dri/renderD128`, but the guest Vulkan vendor and device must match it: a missing driver or a conflicting `VK_DRIVER_FILES` fails the launch instead of silently using another GPU. \
+Other GPU and driver combinations, and 32-bit games, still need qualification. \
+See the [Legion documentation](https://github.com/brcly/legion-kvm) for the current support matrix.
+
+Before the game starts, the launcher runs `legion doctor` and `legion inspect-launch -- <Proton command>` and stops with Legion's own output if either fails. \
+The second check sees the unwrapped Proton command, before host wrappers make it opaque.
+
+Legion wraps the Proton command, so the wrapper chain keeps its order:
+
+```
+gamemoderun ... wezterm ... gamescope ... legion mangohud <Proton command>
+```
+
+Host wrappers stay outside the VM and `mangohud` sits inside Legion's own argument list, where Legion reads it as a request for the guest overlay. \
+Flags that do not apply inside the VM are disabled before the command is built, so they cannot leak into Proton: `-v`, `-h`, `-p`, `-F`, `-f`, `-L` and `-P`. \
+In particular, `-P` is dropped before it can strip the Steam runtime. \
+GameMode, Gamescope and wezterm keep working because they run on the host, and `-E` still patches the shared game directory.
+
+Legion reads its settings from the environment: `LEGION_MEMORY_MIB`, `LEGION_RENDER_NODE`, `LEGION_FULLSCREEN`, `LEGION_STARTUP_UI` and `LEGION_STARTUP_TIMEOUT_SECONDS`. \
+Legion forwards only its whitelisted host variables into the guest, so unrelated host variables do not cross.
+
+### Legion profiles
+
+Each game gets a profile in `~/.config/game-launcher/config.toml`, stored as `[[legion_games]]`:
+
+```toml
+[[legion_games]]
+name = "My game"
+app_id = "123456"
+exe = "game.exe"
+enabled = true
+memory_mib = 12288
+render_node = ""
+fullscreen = false
+startup_ui = "auto"
+startup_timeout_seconds = 180
+```
+
+| Key                       | Meaning                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `name`                    | Label shown in the profile list. Empty falls back to the executable or App ID.                                      |
+| `app_id`                  | Steam App ID matcher, matched first. Digits only; empty disables this matcher.                                      |
+| `exe`                     | Executable matcher, matched second by file name (case-insensitive). A full path is accepted.                        |
+| `enabled`                 | Whether Legion runs this game. `-K` overrides `false` for one launch.                                               |
+| `memory_mib`              | Guest RAM, 4096 through 65536. Out-of-range values fall back to 12288 with a log line.                              |
+| `render_node`             | DRM render node passed as `LEGION_RENDER_NODE`; empty leaves Legion's automatic selection alone.                    |
+| `fullscreen`              | `LEGION_FULLSCREEN=1` when true.                                                                                    |
+| `startup_ui`              | `auto`, `window`, `log` or `off`.                                                                                   |
+| `startup_timeout_seconds` | Seconds to the first frame, 30 through 900. Out-of-range values fall back to 180 with a log line.                    |
+
+Profiles are matched by App ID first and executable file name second, so the same game works from Steam and from a direct `.exe` launch. \
+The first Legion launch of a game without a profile generates one from the game name, App ID and executable, appends it to the config with comments preserved, and uses it immediately. \
+That profile is normal user data: `-C` edits or removes it and the launcher never overwrites it.
+
+In `-C`, the `Game profiles` row opens the Legion game list. \
+`a` adds a profile and opens its form, `enter` edits, `d` removes, and `s` saves without leaving. \
+In the form, up/down selects a field, space or enter toggles a boolean or cycles `startup_ui`, left/right cycles `startup_ui` backwards or forwards, and enter on a text or number value opens inline editing. \
+`esc` goes back one level without discarding what is already in the document; the last removal restores `legion_games = []`. \
+The list marks profiles that have neither matcher, because those never apply automatically.
+
+A global `legion_path` selects a different executable. \
+Empty means next to the running `game` binary, then `PATH`, then `~/.local/bin/legion` and `/usr/local/bin/legion`. \
+A configured path may start with `~` or be a bare command name.
+
 ## Configuration
 
 Defaults live in `~/.config/game-launcher/config.toml`. \
@@ -225,7 +319,8 @@ Use `-C` to edit it in a terminal (TUI):
   a command like `./mod-loader.sh` in `mods`, and `PROTON_NO_ESYNC=1` in `exports`
   (an empty value, `VAR=`, unsets a variable).
   The editor shows the example for each list.
-- `s` saves, `q` quits (with a save/discard prompt when there are unsaved changes), and `ctrl+c` quits at once without saving.
+- enter on `Game profiles` opens the [Legion profile list](#legion-profiles), with its own add, edit and remove keys.
+- `s` saves, `q` quits from the main form (with a save/discard prompt when there are unsaved changes), and `ctrl+c` quits at once without saving.
 
 Saving rewrites the file through `toml_edit`, so comments and formatting are kept.
 `-C` is an action: it ignores any game command given alongside it.
@@ -245,6 +340,10 @@ The launcher exports it as `WAYLANDDRV_PRIMARY_MONITOR` and, when Wayland is off
 Next to the picker the editor shows `this terminal: <output>`, so the names can be told apart (KWin, Hyprland and Sway can report which output the focused window is on). \
 On the monitor row, `i` refreshes that and lists every detected output with its resolution and position, marking the one the editor is running on.
 
+The `legion` setting enables Legion for every Proton launch that has no matching profile; `-K` enables it for one launch. \
+`legion_path` selects the Legion executable, and the per-game settings live in `[[legion_games]]`, see [Legion KVM](#legion-kvm--k). \
+The defaults file shows the profile schema, and `-C` writes profiles without losing its comments.
+
 ## Launch options generator (`-k`)
 
 `-k` opens the same kind of form as `-C`, but it builds the line you paste into a game's Launch Options in Steam instead of saving anything:
@@ -261,6 +360,9 @@ Changing nothing gives a bare `game -- %command%`, and the line is shown in the 
 - `p` switches between `game` and the absolute path of the running binary, for setups where `PATH` does not have it (a root install makes `game` enough, gaming mode may need the path);
 - `s` copies the line without leaving, `q` (or `esc`) copies it and exits, `ctrl+c` exits without copying;
 - changes a flag cannot express are listed in the footer: a boolean your config turned off cannot be turned back on by a flag, a value with no flag such as `wayland_default` can only be changed there, and a list entry can be added by a flag but not removed, so those cases point at `-C`.
+
+Legion profiles are hidden from `-k`, because no launch flag can create or select one; use `-C`. \
+`-K` in a hand written launch line still enables Legion for that one launch.
 
 The copy is done with the first of `wl-copy`, `xclip`, `xsel` or `pbcopy` that works. \
 The line is always printed to the terminal as well, so a machine without a clipboard tool still shows it.
@@ -312,6 +414,8 @@ Logs live under `$HOME/logs/game/`.
 - At most 3 plain `.log` files are kept per folder. On the next launch, older logs are compressed to `<name>.log.tar.gz` and the originals are removed.
   Archives are not deleted automatically.
 - On a non-zero exit the active log is renamed to `"... (CRASHED: <code>).log"`.
+- With Legion, the log also records the session directory and the phases from its `proton-phases.json`. \
+  A failed phase marks the launch as failed and names the phase in the notification, because Legion's exit status describes the VM session rather than the game.
 
 Logging levels:
 

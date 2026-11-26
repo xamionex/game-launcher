@@ -543,6 +543,19 @@ fn maybe_wrap(
     }
 }
 
+/// Prepend the Legion launcher around the Proton command.
+///
+/// Host wrappers such as gamescope and gamemoderun are added after this, so they stay outside the VM.
+/// The `mangohud` token is added before Legion instead, where Legion reads it as a request for the guest overlay.
+fn wrap_legion(app: &App, cmd: Vec<String>) -> Vec<String> {
+    if app.legion_binary.as_os_str().is_empty() {
+        app.log("Legion binary is not resolved, skipping the Legion wrapper");
+        return cmd;
+    }
+    let binary = app.legion_binary.to_string_lossy().into_owned();
+    prepend(&[&binary], &cmd)
+}
+
 /// Export the global environment and wrap the command with the enabled tools.
 pub fn apply_wrappers(app: &mut App) {
     if app.disable_sdl3 {
@@ -667,7 +680,16 @@ pub fn apply_wrappers(app: &mut App) {
 
     let mut cmd = std::mem::take(&mut app.cmd);
 
-    cmd = maybe_wrap(app, cmd, app.protonhax, "protonhax", &["protonhax", "init"]);
+    if app.legion {
+        // Legion reads this token from its own argument list and enables the guest overlay.
+        // It is not a host wrapper: Legion never executes it outside the VM.
+        if app.mangohud {
+            cmd = prepend(&["mangohud"], &cmd);
+        }
+        cmd = wrap_legion(app, cmd);
+    } else {
+        cmd = maybe_wrap(app, cmd, app.protonhax, "protonhax", &["protonhax", "init"]);
+    }
 
     // Gamescope has two variants and sets Wayland env vars, so it is handled outside maybe_wrap but still checks for the binary.
     if app.gamescope_wayland {
@@ -727,7 +749,9 @@ pub fn apply_wrappers(app: &mut App) {
         }
     }
 
-    cmd = maybe_wrap(app, cmd, app.mangohud, "mangohud", &["mangohud"]);
+    if !app.legion {
+        cmd = maybe_wrap(app, cmd, app.mangohud, "mangohud", &["mangohud"]);
+    }
     cmd = maybe_wrap(
         app,
         cmd,
@@ -747,7 +771,9 @@ pub fn apply_wrappers(app: &mut App) {
 
     // LinuwUx must sit at the very front of the chain: `linuwux mangohud ...`
     // works, but `mangohud linuwux ...` often fails.
-    cmd = wrap_linuwux(app, cmd);
+    if !app.legion {
+        cmd = wrap_linuwux(app, cmd);
+    }
 
     app.cmd = cmd;
 }
@@ -1040,5 +1066,40 @@ interface: 'wl_output',                           version:  4, name: 66
         std::env::set_var("XDG_CURRENT_DESKTOP", "KDE");
         std::env::remove_var("SteamGameId");
         assert!(!is_gaming_mode());
+    }
+
+    #[test]
+    fn legion_keeps_mangohud_inside_and_protonhax_outside() {
+        let mut app = App {
+            legion: true,
+            mangohud: true,
+            // Keep the host's gaming mode detection from changing the intent.
+            mangohud_force: true,
+            gamemode: false,
+            // Legion suppresses this before wrapping; the wrapper itself must not add it.
+            protonhax: true,
+            isproton: true,
+            legion_binary: PathBuf::from("/usr/bin/legion"),
+            cmd: vec![
+                "proton".to_string(),
+                "waitforexitandrun".to_string(),
+                "/games/Example/Example.exe".to_string(),
+            ],
+            ..App::default()
+        };
+
+        apply_wrappers(&mut app);
+
+        assert_eq!(
+            app.cmd,
+            vec![
+                "/usr/bin/legion".to_string(),
+                "mangohud".to_string(),
+                "proton".to_string(),
+                "waitforexitandrun".to_string(),
+                "/games/Example/Example.exe".to_string(),
+            ],
+            "Legion wraps mangohud, and protonhax stays on the host"
+        );
     }
 }

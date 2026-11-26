@@ -116,18 +116,60 @@ pub fn run_game(app: &mut App) -> i32 {
         RunOutcome::SpawnFailed(_) => 127,
     };
 
+    // Legion's exit status describes the VM session, not the game. The phase report is authoritative when it exists.
+    let legion_session = if app.legion {
+        crate::legion::session_summary(app)
+    } else {
+        None
+    };
+    let failed = match &legion_session {
+        Some(summary) if !summary.phases.is_empty() => !summary.succeeded(),
+        _ => exit_status != 0,
+    };
+    let failure_label = match &legion_session {
+        Some(summary) => summary
+            .failed_phase()
+            .map(|phase| format!("legion phase {}", sanitize_label(phase)))
+            .unwrap_or_else(|| exit_status.to_string()),
+        None => exit_status.to_string(),
+    };
+
     if app.logging_level >= 0 {
         if let Some(log) = &log {
             if let RunOutcome::SpawnFailed(err) = &outcome {
                 append_line(log, &format!("Launch error: {err}"));
             }
+            if let Some(summary) = &legion_session {
+                append_line(log, &format!("Legion session: {}", summary.dir.display()));
+                if summary.phases.is_empty() {
+                    append_line(
+                        log,
+                        "Legion phases: no proton-phases.json, the session did not reach the game",
+                    );
+                } else {
+                    for phase in &summary.phases {
+                        append_line(
+                            log,
+                            &format!(
+                                "Legion phase {}: {} ({} ms)",
+                                phase.phase,
+                                if phase.success { "ok" } else { "FAILED" },
+                                phase.elapsed_ms
+                            ),
+                        );
+                    }
+                }
+            }
             log_separator(log, '=', "\u{1f6d1} GAME EXITED \u{1f6d1}");
             append_line(log, &format!("Exit Status: {exit_status}"));
         }
-        if exit_status != 0 {
+        if failed {
             if let Some(old) = app.log_file.clone() {
-                let new_name =
-                    PathBuf::from(format!("{} (CRASHED: {}).log", log_stem(&old), exit_status));
+                let new_name = PathBuf::from(format!(
+                    "{} (CRASHED: {}).log",
+                    log_stem(&old),
+                    failure_label
+                ));
                 if std::fs::rename(&old, &new_name).is_ok() {
                     app.log_file = Some(new_name);
                 }
@@ -135,9 +177,74 @@ pub fn run_game(app: &mut App) -> i32 {
         }
     }
 
-    notify_on_failure(app, &outcome);
+    match &outcome {
+        RunOutcome::SpawnFailed(_) => notify_on_failure(app, &outcome),
+        RunOutcome::Ran(_) if app.legion => {
+            notify_legion_failure(app, legion_session.as_ref(), exit_status)
+        }
+        _ => notify_on_failure(app, &outcome),
+    }
 
     exit_status
+}
+
+/// Game label used by notifications.
+fn game_label(app: &App) -> String {
+    let name = if app.game_name.is_empty() {
+        logging::derive_game_name(app)
+    } else {
+        app.game_name.clone()
+    };
+    if name.is_empty() {
+        "the game".to_string()
+    } else {
+        name
+    }
+}
+
+/// Keep a label safe to use inside a log file name.
+fn sanitize_label(label: &str) -> String {
+    label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Notify when a Legion session failed, using the phase report instead of Legion's session exit code.
+fn notify_legion_failure(
+    app: &App,
+    summary: Option<&crate::legion::SessionSummary>,
+    exit_status: i32,
+) {
+    let name = game_label(app);
+    if let Some(summary) = summary {
+        if let Some(phase) = summary.failed_phase() {
+            config::notify(
+                "Legion session failed",
+                &format!(
+                    "{name}: phase {phase} failed; logs are in {}",
+                    summary.dir.display()
+                ),
+            );
+            return;
+        }
+        if !summary.phases.is_empty() {
+            // Every phase succeeded, so a nonzero session status is not a game crash.
+            return;
+        }
+    }
+    if exit_status != 0 {
+        config::notify(
+            "Legion session failed",
+            &format!("{name}: legion exited with code {exit_status}"),
+        );
+    }
 }
 
 /// Notify the user when the game crashed, distinguishing a game crash from a

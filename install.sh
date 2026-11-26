@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 # Installer for game-launcher.
 #
-# Downloads the latest release binary from GitHub and installs it, plus the bundled dxvk config.
+# Downloads the latest release binaries from GitHub and installs them, plus the bundled dxvk config.
 # Also refreshes the payload cache (EOS-Proxy dll and netsock fix.so) so a reinstall picks up the latest upstream releases.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --user
+#   curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --no-legion
 #
 # Root install (default, preferred):
-#   - binary goes to /usr/local/bin/game
+#   - binaries go to /usr/local/bin/game and /usr/local/bin/legion
 #   - works in Steam Deck gaming mode without specifying the full path
 #   - re-runs itself with sudo when not already root
 #
 # User install (--user):
-#   - binary goes to ~/.local/bin/game
-#   - gaming mode may not find it, see the README
+#   - binaries go to ~/.local/bin/game and ~/.local/bin/legion
+#   - gaming mode may not find them, see the README
+#
+# --no-legion installs only game. Legion KVM is AGPL-3.0-only and is invoked as a separate program.
+# Source: https://github.com/brcly/legion-kvm/tree/0197712f1a12ce70411d575b33306349c7b19c37
 #
 # The dxvk config always goes to the invoking user's ~/.config/dxvk/dxvk.conf, even for root installs.
 # Payloads go to the invoking user's config directory (honoring XDG_CONFIG_HOME), and a failed payload fetch is only a warning: the binary embeds fallback copies.
@@ -24,6 +28,9 @@ set -eu
 
 REPO="xamionex/game-launcher"
 BIN_NAME="game"
+LEGION_NAME="legion"
+LEGION_REPO="https://github.com/brcly/legion-kvm"
+LEGION_COMMIT="0197712f1a12ce70411d575b33306349c7b19c37"
 # Overridable for testing and forks.
 API="${GAME_LAUNCHER_API:-https://api.github.com/repos/$REPO/releases/latest}"
 RAW_URL="${GAME_LAUNCHER_RAW:-https://raw.githubusercontent.com/$REPO/main}"
@@ -78,14 +85,15 @@ ask_remove() {
 # The same binary installed in the other location can shadow this one, depending on PATH order.
 # Reports it, then asks whether to remove it. Never fatal: the install itself has already succeeded.
 check_conflicting_install() {
+    name="$1"
     if [ "$MODE" = "root" ]; then
-        conflict="$TARGET_HOME/.local/bin/$BIN_NAME"
+        conflict="$TARGET_HOME/.local/bin/$name"
     else
-        conflict="/usr/local/bin/$BIN_NAME"
+        conflict="/usr/local/bin/$name"
     fi
     [ -e "$conflict" ] || return 0
 
-    warn "another $BIN_NAME is installed at $conflict (this install is $BIN_DIR/$BIN_NAME)"
+    warn "another $name is installed at $conflict (this install is $BIN_DIR/$name)"
     # A readability test on /dev/tty passes in processes without a controlling terminal, so try to open it.
     if ! (exec 3</dev/tty) 2>/dev/null; then
         info "no terminal to ask on; remove the other copy if you want only one install"
@@ -109,43 +117,63 @@ check_conflicting_install() {
 }
 
 MODE="root"
-if [ "${1:-}" = "--user" ]; then
-    MODE="user"
-elif [ "${1:-}" = "--root" ]; then
-    # Internal mode used by the sudo re-run below.
-    MODE="root"
-elif [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-    cat <<EOF
-Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh [-- --user]
+INSTALL_LEGION=1
+for arg in "$@"; do
+    case "$arg" in
+        --user)
+            MODE="user"
+            ;;
+        --root)
+            # Internal mode used by the sudo re-run below.
+            MODE="root"
+            ;;
+        --no-legion)
+            INSTALL_LEGION=0
+            ;;
+        --help|-h)
+            cat <<EOF
+Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh [-- --user] [--no-legion]
 
-Installs the game-launcher binary, the dxvk config and refreshes the payload cache (EOS-Proxy dll, netsock and linuwux loaders).
+Installs the game-launcher binaries, the dxvk config and refreshes the payload cache (EOS-Proxy dll, netsock and linuwux loaders).
 
 Root install (default, preferred):
-  binary at /usr/local/bin/$BIN_NAME, works in Steam Deck gaming mode without specifying the full path.
+  binaries at /usr/local/bin/game and /usr/local/bin/legion, works in Steam Deck gaming mode without specifying the full path.
   Prompts for sudo when needed.
 
 User install (--user):
-  binary at ~/.local/bin/$BIN_NAME.
+  binaries at ~/.local/bin/game and ~/.local/bin/legion.
 
-An existing copy in the other location is reported, and removed when you confirm, so PATH order cannot pick a stale one.
+--no-legion:
+  install only game. Legion is then unavailable, and -K reports that the legion binary is missing.
+
+An existing copy of either binary in the other location is reported, and removed when you confirm, so PATH order cannot pick a stale one.
+Legion KVM is AGPL-3.0-only and is invoked as a separate program.
+Source: $LEGION_REPO/tree/$LEGION_COMMIT
 The dxvk config always goes to ~/.config/dxvk/dxvk.conf for the invoking user.
 Payloads go to the invoking user's config directory.
 LinUwUx goes to ~/.local/share/linuwux/LinUwUx.so.
 EOF
-    exit 0
-elif [ -n "${1:-}" ]; then
-    die "unknown argument: $1 (use --user for a user install, --help for usage)"
-fi
+            exit 0
+            ;;
+        *)
+            die "unknown argument: $arg (use --user for a user install, --no-legion to skip Legion, --help for usage)"
+            ;;
+    esac
+done
 
-# Root installs re-run themselves with sudo so the binary can be written to /usr/local/bin.
+# Root installs re-run themselves with sudo so the binaries can be written to /usr/local/bin.
 # The script is re-downloaded inside the sudo shell because $0 is not a usable path when the script is piped from curl.
 if [ "$MODE" = "root" ] && [ "$(id -u)" -ne 0 ]; then
     if command -v sudo >/dev/null 2>&1; then
+        REEXEC_ARGS="--root"
+        if [ "$INSTALL_LEGION" -eq 0 ]; then
+            REEXEC_ARGS="$REEXEC_ARGS --no-legion"
+        fi
         info "root install requested, re-running with sudo"
         exec sudo TARGET_USER="$TARGET_USER" TARGET_HOME="$TARGET_HOME" \
             XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" \
             GAME_LAUNCHER_API="$API" GAME_LAUNCHER_RAW="$RAW_URL" \
-            bash -c "curl -fsSL '$RAW_URL/install.sh' | bash -s -- --root"
+            bash -c "curl -fsSL '$RAW_URL/install.sh' | bash -s -- $REEXEC_ARGS"
     fi
     die "root install requested but sudo is not available; use --user instead"
 fi
@@ -169,27 +197,58 @@ command -v mktemp >/dev/null 2>&1 || die "mktemp is required but not installed"
 info "fetching latest release info for $REPO"
 RELEASE_JSON="$(curl -fsSL "$API")" || die "failed to reach the GitHub API"
 
-ASSET_URL="$(printf '%s' "$RELEASE_JSON" | sed -n 's/.*"browser_download_url": *"\([^"]*\/game\)".*/\1/p' | head -n 1)"
+# URL of a release asset by exact name.
+asset_url() {
+    printf '%s' "$RELEASE_JSON" \
+        | sed -n "s/.*\"browser_download_url\": *\"\\([^\"]*\\/$1\\)\".*/\\1/p" \
+        | head -n 1
+}
+
+ASSET_URL="$(asset_url "$BIN_NAME")"
 [ -n "$ASSET_URL" ] || die "no release asset named '$BIN_NAME' found; create a release first (see README)"
 
+LEGION_URL=""
+if [ "$INSTALL_LEGION" -eq 1 ]; then
+    LEGION_URL="$(asset_url "$LEGION_NAME")"
+    if [ -z "$LEGION_URL" ]; then
+        die "no release asset named '$LEGION_NAME' found; re-run with --no-legion to install only $BIN_NAME"
+    fi
+fi
+
 TAG="$(printf '%s' "$RELEASE_JSON" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
-info "downloading $BIN_NAME ${TAG:+($TAG)}"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-curl -fsSL -o "$TMP_DIR/$BIN_NAME" "$ASSET_URL" || die "download failed"
+download_asset() {
+    name="$1"
+    url="$2"
+    info "downloading $name ${TAG:+($TAG)}"
+    curl -fsSL -o "$TMP_DIR/$name" "$url" || die "download of $name failed"
 
-# Sanity check: the asset must be an executable ELF binary.
-head -c 4 "$TMP_DIR/$BIN_NAME" | grep -q "$(printf '\177ELF')" || die "downloaded file is not an ELF binary"
+    # Sanity check: each asset must be an executable ELF binary.
+    head -c 4 "$TMP_DIR/$name" | grep -q "$(printf '\177ELF')" || die "$name is not an ELF binary"
 
-chmod 755 "$TMP_DIR/$BIN_NAME"
+    chmod 755 "$TMP_DIR/$name"
+}
+
+# Fetch both files before installing either, so a missing or broken asset leaves the current install untouched.
+download_asset "$BIN_NAME" "$ASSET_URL"
+if [ "$INSTALL_LEGION" -eq 1 ]; then
+    download_asset "$LEGION_NAME" "$LEGION_URL"
+fi
 
 info "installing binary to $BIN_DIR/$BIN_NAME"
 mkdir -p "$BIN_DIR"
 install -m 755 "$TMP_DIR/$BIN_NAME" "$BIN_DIR/$BIN_NAME"
 
-check_conflicting_install
+check_conflicting_install "$BIN_NAME"
+
+if [ "$INSTALL_LEGION" -eq 1 ]; then
+    info "installing $LEGION_NAME to $BIN_DIR/$LEGION_NAME"
+    install -m 755 "$TMP_DIR/$LEGION_NAME" "$BIN_DIR/$LEGION_NAME"
+    check_conflicting_install "$LEGION_NAME"
+fi
 
 info "installing dxvk config to $DXVK_DIR/dxvk.conf"
 mkdir -p "$DXVK_DIR"
@@ -261,4 +320,10 @@ else
     info "installed at $BIN_DIR/$BIN_NAME"
     info "make sure $BIN_DIR is on your PATH"
     warn "Steam Deck gaming mode may not find it; prefer the root install"
+fi
+if [ "$INSTALL_LEGION" -eq 1 ]; then
+    info "$LEGION_NAME installed at $BIN_DIR/$LEGION_NAME"
+    info "Legion KVM is AGPL-3.0-only; source: $LEGION_REPO/tree/$LEGION_COMMIT"
+else
+    info "skipped $LEGION_NAME (--no-legion); -K reports that the legion binary is missing"
 fi

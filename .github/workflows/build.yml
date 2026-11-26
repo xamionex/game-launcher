@@ -7,6 +7,10 @@ on:
 permissions:
   contents: write
 
+env:
+  LEGION_REPO: brcly/legion-kvm
+  LEGION_COMMIT: 0197712f1a12ce70411d575b33306349c7b19c37
+
 jobs:
   build:
     name: Build (linux)
@@ -48,20 +52,109 @@ jobs:
           name: game-linux
           path: target/x86_64-unknown-linux-gnu/release/game
 
+  legion:
+    name: Build Legion (linux)
+    runs-on: ubuntu-latest
+    # The first build compiles QEMU, Mesa, the guest kernel and the Rust tools.
+    timeout-minutes: 360
+
+    steps:
+      # The standard runner has too little free space for Legion's 25 GiB build.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost \
+            /usr/local/.ghcup \
+            /opt/microsoft/powershell \
+            /usr/share/swift
+          sudo apt-get clean
+          docker system prune -af --volumes || true
+          df -h /
+
+      - name: Checkout Legion
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.LEGION_REPO }}
+          ref: ${{ env.LEGION_COMMIT }}
+          path: legion
+
+      # Source archives are checksum-verified, so a stale cache fails loudly instead of corrupting a build.
+      - name: Cache Legion sources
+        uses: actions/cache@v4
+        with:
+          path: legion/build/cache
+          key: legion-sources-${{ env.LEGION_COMMIT }}-${{ hashFiles('legion/config/sources.json') }}
+
+      - name: Build Legion
+        working-directory: legion
+        run: python3 tools/build.py --jobs "$(nproc)"
+
+      - name: Smoke test the packaged executable
+        working-directory: legion
+        run: |
+          test -x build/dist/legion
+          ./build/dist/legion --version
+
+      - name: Collect the release files
+        working-directory: legion
+        run: |
+          mkdir -p release
+          cp build/dist/legion release/legion
+          cp LICENSE release/LEGION-LICENSE
+          cp NOTICE release/LEGION-NOTICE
+          {
+            printf 'legion is licensed under AGPL-3.0-only.\n'
+            printf 'Source: https://github.com/%s/tree/%s\n' "$LEGION_REPO" "$LEGION_COMMIT"
+          } > release/LEGION-SOURCE.txt
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: legion-linux
+          path: |
+            legion/release/legion
+            legion/release/LEGION-LICENSE
+            legion/release/LEGION-NOTICE
+            legion/release/LEGION-SOURCE.txt
+
   release:
     name: Publish Release
-    needs: build
+    needs: [ build, legion ]
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download artifact
+      - name: Download game
         uses: actions/download-artifact@v4
         with:
           name: game-linux
           path: ./dist
 
+      - name: Download Legion
+        uses: actions/download-artifact@v4
+        with:
+          name: legion-linux
+          path: ./dist
+
+      - name: Write checksums
+        working-directory: ./dist
+        run: sha256sum game legion LEGION-LICENSE LEGION-NOTICE LEGION-SOURCE.txt > SHA256SUMS
+
       - name: Publish Release
         uses: softprops/action-gh-release@v3
         with:
-          files: ./dist/game
+          body: |
+            Legion KVM is bundled as a separate program and is licensed under AGPL-3.0-only.
+            Source: https://github.com/${{ env.LEGION_REPO }}/tree/${{ env.LEGION_COMMIT }}
+          files: |
+            ./dist/game
+            ./dist/legion
+            ./dist/LEGION-LICENSE
+            ./dist/LEGION-NOTICE
+            ./dist/LEGION-SOURCE.txt
+            ./dist/SHA256SUMS
           generate_release_notes: true
