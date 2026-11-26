@@ -68,6 +68,7 @@ fn apply_bool_flag(app: &mut App, c: char) -> Result<(), ParseError> {
         'R' => {}
         'F' => app.fix_audit = true,
         'v' => app.hypervisor = true,
+        'a' => app.artitux = true,
         'E' => app.eos_proxy = true,
         'K' => {
             app.legion = true;
@@ -219,8 +220,9 @@ pub fn print_help(prog: &str) {
     eprintln!("  -h            Hypervisor kernel modules: unload KVM (kills running VMs), load cpuid_fault_emulation, restore the previous state when the game exits (asks for the root password)");
     eprintln!("  -v            Enable hypervisor loader (LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so, sets PROTON_DISABLE_LSTEAMCLIENT=0)");
     eprintln!("                Might require you to disable mangohud with -H");
+    eprintln!("  -a            Enable Artitux loader for Artifact releases (LD_PRELOAD=$HOME/.local/share/artitux/Artitux.so, replaces -v)");
     eprintln!("  -E            Enable EOS-Proxy (replaces the game's EOSSDK-Win64-Shipping.dll, skips games already patched)");
-    eprintln!("  -K            Run the game inside Legion KVM (Proton games only; disables -v, -h, -p, -F, -f, -L and -P)");
+    eprintln!("  -K            Run the game inside Legion KVM (Proton games only; disables -v, -a, -h, -p, -F, -f, -L and -P)");
     eprintln!();
     eprintln!("== Actions ==");
     eprintln!("  -C            Open the interactive config editor (~/.config/game-launcher/config.toml) and exit");
@@ -421,6 +423,15 @@ mod tests {
         assert!(!app.hypervisor);
         parse_flags(&mut app, &v(&["-v", "--", "x"])).unwrap();
         assert!(app.hypervisor);
+    }
+
+    #[test]
+    fn artitux_flag_enables_its_loader() {
+        let mut app = App::default();
+        assert!(!app.artitux);
+        parse_flags(&mut app, &v(&["-a", "--", "x"])).unwrap();
+        assert!(app.artitux);
+        assert!(!app.hypervisor, "-a does not enable the LinuwUx loader");
     }
 
     #[test]

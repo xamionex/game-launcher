@@ -97,9 +97,9 @@ ln -s $PWD/dxvk ~/.config/dxvk
 `cargo build` only produces `game`. \
 For `-K`, install Legion with the [curl installer](#automatic-install), put a packaged `legion` next to the `game` binary, put it on `PATH`, or set `legion_path` in the config.
 
-netsock and the hypervisor loader (LinUwUx.so) are embedded in the binary and self-extract on first use, no setup needed. \
-netsock goes to `$HOME/.config/SLSsteam/tools/netsock/` and the hypervisor to `$HOME/.local/share/linuwux/`. \
-Both are also fetched from their upstream releases into `~/.config/game-launcher/payloads/`, see [Payloads](#payloads).
+netsock and the game loaders (LinUwUx.so and Artitux.so) are embedded in the binary and self-extract on first use, no setup needed. \
+netsock goes to `$HOME/.config/SLSsteam/tools/netsock/`, LinUwUx to `$HOME/.local/share/linuwux/` and Artitux to `$HOME/.local/share/artitux/`. \
+All of them are also fetched from their upstream releases into `~/.config/game-launcher/payloads/`, see [Payloads](#payloads).
 
 Hypervisor setup and usage guide: https://cs.rin.ru/forum/viewtopic.php?f=20&t=160056 \
 Hypervisor requires mangohud to be disabled sometimes to fully work (`-vH`); `-h` handles the kernel module, only needed on AMD Ryzen on AM4 (older than 7000) and the Steam Deck, see [Hypervisor kernel modules](#hypervisor-kernel-modules).
@@ -179,6 +179,7 @@ Disabled by default (use the flag to enable):
 | `-V` | Enable custom vkd3d-proton loading                                                                                                                                                       |
 | `-h` | Hypervisor kernel modules: unload KVM (killing any running virtual machines), load `cpuid_fault_emulation` before the game, and restore the previous module state when it exits, as root |
 | `-v` | Enable hypervisor loader: `LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so` and `PROTON_DISABLE_LSTEAMCLIENT=0` (self-extracts if missing)                                              |
+| `-a` | Enable the Artitux loader for Artifact releases: `LD_PRELOAD=$HOME/.local/share/artitux/Artitux.so` (self-extracts if missing, replaces `-v` when both are enabled)                        |
 | `-E` | Enable EOS-Proxy: replaces the game's `EOSSDK-Win64-Shipping.dll` with the proxy, skipped when the game is already patched                                                               |
 | `-K` | Run a Proton game inside Legion KVM for this launch, overriding a profile's `enabled = false`; errors on a native Linux game                                                            |
 
@@ -224,7 +225,15 @@ or when ananicy-cpp is running, since both renice processes themselves.
 - a step that fails is rolled back to the state found before the launch and reported with a notification; the game still starts.
 - everything runs as root through `modprobe`: when the launcher runs in a terminal, `sudo` asks there; from Steam (no terminal) it uses a cached credential, otherwise the polkit dialog (`pkexec`, the KDE/GNOME authentication window) or a graphical password prompt (`zenity`/`kdialog`/`yad` feeding `sudo -S`). The password is asked once per phase, and polkit/sudo may remember it, so the restore at game exit often does not ask again. Unloading KVM kills any running virtual machines.
 
-`-h` is independent of `-v`: `-h` only touches the kernel modules, `-v` only puts the LinuwUx loader in `LD_PRELOAD`, so setups with their own module handling can use `-v` alone.
+`-h` is independent of `-v` and `-a`: `-h` only touches the kernel modules, while the loaders only go into `LD_PRELOAD`, so setups with their own module handling can use `-v` or `-a` alone.
+
+## Artitux (`-a`)
+
+[Artitux](https://github.com/Lumice/artitux) is a fork of LinUwUx for Artifact releases. \
+It loads through `LD_PRELOAD` like LinUwUx, but it covers a narrower set of games, so it does not replace `-v` for games that already work with LinUwUx; that is also what Artitux's own README recommends. \
+`-a` puts `$HOME/.local/share/artitux/Artitux.so` in `LD_PRELOAD` and self-extracts it when missing, following the same payload cache and installer refresh as LinUwUx. \
+Artitux sets `PROTON_DISABLE_LSTEAMCLIENT=1` itself, while `-v` sets it to `0`. \
+When both `-a` and `-v` are enabled, `-a` wins because the two loaders interpose the same symbols.
 
 ## Legion KVM (`-K`)
 
@@ -253,7 +262,7 @@ gamemoderun ... wezterm ... gamescope ... legion mangohud <Proton command>
 ```
 
 Host wrappers stay outside the VM and `mangohud` sits inside Legion's own argument list, where Legion reads it as a request for the guest overlay. \
-Flags that do not apply inside the VM are disabled before the command is built, so they cannot leak into Proton: `-v`, `-h`, `-p`, `-F`, `-f`, `-L` and `-P`. \
+Flags that do not apply inside the VM are disabled before the command is built, so they cannot leak into Proton: `-v`, `-a`, `-h`, `-p`, `-F`, `-f`, `-L` and `-P`. \
 In particular, `-P` is dropped before it can strip the Steam runtime. \
 GameMode, Gamescope and wezterm keep working because they run on the host, and `-E` still patches the shared game directory.
 
@@ -369,7 +378,7 @@ The line is always printed to the terminal as well, so a machine without a clipb
 
 ## Payloads
 
-Three payloads are fetched from their upstream releases and cached in
+Four payloads are fetched from their upstream releases and cached in
 `~/.config/game-launcher/payloads/`:
 
 | File                        | Source                                                                                     | Used by |
@@ -377,17 +386,18 @@ Three payloads are fetched from their upstream releases and cached in
 | `EOSSDK-Win64-Shipping.dll` | [eos-proxy](https://github.com/yesyes0649/eos-proxy) releases                              | `-E`    |
 | `netsock.so`                | [steamnetsock-patch](https://github.com/yesyes0649/steamnetsock-patch) releases (`fix.so`) | `-F`    |
 | `LinUwUx.so`                | [linuwux-runtime](https://github.com/brcly/linuwux-runtime) releases (`LinUwUx.so`)        | `-v`    |
+| `Artitux.so`                | [artitux](https://github.com/Lumice/artitux) releases (`Artitux.so`)                       | `-a`    |
 
 Each payload is downloaded once. \
 If the download fails (offline, GitHub unreachable, curl missing) the copy embedded in the binary is used instead, and a failed download is not cached, so a later launch can still pick up the latest release. \
 Delete the cached file to force a refresh. \
-The [installer](#automatic-install) also refreshes all three payloads on every install or reinstall.
+The [installer](#automatic-install) also refreshes all four payloads on every install or reinstall.
 
 The copies embedded in the binary are kept current by the test suite.
 `cargo test` fetches every upstream release and compares it with the file in the repository: an outdated copy is replaced with the upstream one and the test fails, so the update gets committed and the next build embeds it.
 When GitHub or curl cannot be reached the payloads it could not check are reported (run `cargo test -- --nocapture` to see them) and the test passes, so an offline test run still works.
 
-The loaders are only written to their target path (`LinUwUx.so` to `~/.local/share/linuwux`, `netsock.so` to `~/.config/SLSsteam/tools/netsock`) when that file is missing, so an already extracted loader is left alone.
+The loaders are only written to their target path (`LinUwUx.so` to `~/.local/share/linuwux`, `Artitux.so` to `~/.local/share/artitux`, `netsock.so` to `~/.config/SLSsteam/tools/netsock`) when that file is missing, so an already extracted loader is left alone.
 Delete it to let the next launch extract the cached, up to date copy.
 
 ## EOS-Proxy (`-E`)

@@ -267,6 +267,13 @@ const FIELDS: &[Field] = &[
         section: "Disabled by default",
     },
     Field {
+        key: "artitux",
+        label: "Artitux",
+        flag: "-a",
+        help: "Artitux loader in LD_PRELOAD (Artifact games)",
+        section: "Disabled by default",
+    },
+    Field {
         key: "enable_custom_vkd3d",
         label: "Custom vkd3d",
         flag: "-V",

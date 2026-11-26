@@ -24,6 +24,7 @@
 # The dxvk config always goes to the invoking user's ~/.config/dxvk/dxvk.conf, even for root installs.
 # Payloads go to the invoking user's config directory (honoring XDG_CONFIG_HOME), and a failed payload fetch is only a warning: the binary embeds fallback copies.
 # LinUwUx goes to ~/.local/share/linuwux/LinUwUx.so; a previous ~/.local/lib/liblinuwux.so is removed.
+# Artitux goes to ~/.local/share/artitux/Artitux.so.
 set -eu
 
 REPO="xamionex/game-launcher"
@@ -134,7 +135,7 @@ for arg in "$@"; do
             cat <<EOF
 Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh [-- --user] [--no-legion]
 
-Installs the game-launcher binaries, the dxvk config and refreshes the payload cache (EOS-Proxy dll, netsock and linuwux loaders).
+Installs the game-launcher binaries, the dxvk config and refreshes the payload cache (EOS-Proxy dll, netsock, linuwux and artitux loaders).
 
 Root install (default, preferred):
   binaries at /usr/local/bin/game and /usr/local/bin/legion, works in Steam Deck gaming mode without specifying the full path.
@@ -152,6 +153,7 @@ Source: $LEGION_REPO/tree/$LEGION_COMMIT
 The dxvk config always goes to ~/.config/dxvk/dxvk.conf for the invoking user.
 Payloads go to the invoking user's config directory.
 LinUwUx goes to ~/.local/share/linuwux/LinUwUx.so.
+Artitux goes to ~/.local/share/artitux/Artitux.so.
 EOF
             exit 0
             ;;
@@ -187,9 +189,10 @@ DXVK_DIR="$TARGET_HOME/.config/dxvk"
 # The launcher resolves its config directory through XDG_CONFIG_HOME, so the payload cache has to follow the same rule.
 CONFIG_HOME="${XDG_CONFIG_HOME:-$TARGET_HOME/.config}"
 PAYLOAD_DIR="$CONFIG_HOME/game-launcher/payloads"
-# LinUwUx has its own home; older installers dropped it into ~/.local/lib.
+# The loaders have their own home; older installers dropped LinUwUx into ~/.local/lib.
 LINUWUX_DIR="$TARGET_HOME/.local/share/linuwux"
 OLD_LINUWUX="$TARGET_HOME/.local/lib/liblinuwux.so"
+ARTITUX_DIR="$TARGET_HOME/.local/share/artitux"
 
 command -v curl >/dev/null 2>&1 || die "curl is required but not installed"
 command -v mktemp >/dev/null 2>&1 || die "mktemp is required but not installed"
@@ -310,6 +313,24 @@ if mkdir -p "$LINUWUX_DIR"; then
     fi
 else
     warn "could not create $LINUWUX_DIR, skipping linuwux refresh"
+fi
+
+# Artitux lives under ~/.local/share/artitux, matching its upstream installer.
+info "refreshing artitux in $ARTITUX_DIR"
+
+if mkdir -p "$ARTITUX_DIR"; then
+    fix_owner "$ARTITUX_DIR"
+    if curl -fsSL --connect-timeout 10 --max-time 300 -o "$ARTITUX_DIR/Artitux.so.part" \
+        "https://github.com/Lumice/artitux/releases/latest/download/Artitux.so" \
+        && mv "$ARTITUX_DIR/Artitux.so.part" "$ARTITUX_DIR/Artitux.so"; then
+        chown "$TARGET_USER" "$ARTITUX_DIR/Artitux.so" 2>/dev/null || true
+        info "artitux updated"
+    else
+        rm -f "$ARTITUX_DIR/Artitux.so.part"
+        warn "could not fetch Artitux.so, the launcher will use its bundled copy"
+    fi
+else
+    warn "could not create $ARTITUX_DIR, skipping artitux refresh"
 fi
 
 info "done"

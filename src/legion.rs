@@ -221,6 +221,10 @@ fn suppress_conflicts(app: &mut App) {
         app.hypervisor = false;
         suppressed.push("LinuwUx loader (-v)");
     }
+    if app.artitux {
+        app.artitux = false;
+        suppressed.push("Artitux loader (-a)");
+    }
     if app.hypervisor_modules {
         app.hypervisor_modules = false;
         suppressed.push("hypervisor kernel modules (-h)");
@@ -584,6 +588,7 @@ mod tests {
         let mut app = proton_app();
         app.legion = true;
         app.hypervisor = true;
+        app.artitux = true;
         app.hypervisor_modules = true;
         app.protonhax = true;
         app.fix_audit = true;
@@ -595,6 +600,7 @@ mod tests {
 
         assert!(app.legion);
         assert!(!app.hypervisor);
+        assert!(!app.artitux);
         assert!(!app.hypervisor_modules);
         assert!(!app.protonhax);
         assert!(!app.fix_audit);

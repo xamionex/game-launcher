@@ -1,4 +1,4 @@
-//! Environment setup and command wrapping (gamemode, mangohud, protonhax, gamescope, wezterm, linuwux) plus Wayland/GPU detection.
+//! Environment setup and command wrapping (gamemode, mangohud, protonhax, gamescope, wezterm, linuwux, artitux) plus Wayland/GPU detection.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -20,6 +20,12 @@ pub(crate) const LINUWUX_URL: &str =
     "https://github.com/brcly/linuwux-runtime/releases/latest/download/LinUwUx.so";
 /// Name of the hypervisor loader in the payload cache and in the repository.
 pub(crate) const LINUWUX_NAME: &str = "LinUwUx.so";
+
+/// Upstream release asset for the Artitux loader (`Artitux.so`); fetched into the payload cache on first use and falling back to the embedded copy.
+pub(crate) const ARTITUX_URL: &str =
+    "https://github.com/Lumice/artitux/releases/latest/download/Artitux.so";
+/// Name of the Artitux loader in the payload cache and in the repository.
+pub(crate) const ARTITUX_NAME: &str = "Artitux.so";
 
 /// Return the `lspci -vnn` lines describing display adapters, or an empty string if `lspci` is unavailable.
 fn gpu_info() -> String {
@@ -483,31 +489,24 @@ fn command_exists(program: &str) -> bool {
     find_in_path(program).is_some()
 }
 
-/// Prepend the LinuwUx hypervisor loader as the outermost wrapper.
+/// Prepend an `LD_PRELOAD` loader as the outermost wrapper, extracting it first when it is missing.
 ///
-/// LinuwUx must run before MangoHud/Gamescope/etc. — when it ends up inside another wrapper (e.g. `mangohud linuwux ...`) the game frequently fails to start.
-/// Wrapping the whole chain in `env LD_PRELOAD=...` keeps it at the front while still handing the loader to the game and its helper processes.
+/// The loaders must run before MangoHud/Gamescope/etc. When one ends up inside another wrapper (e.g. `mangohud linuwux ...`) the game frequently fails to start.
+/// Wrapping the whole chain in `env LD_PRELOAD=...` keeps the loader at the front while still handing it to the game and its helper processes.
 /// The loader is taken from the payload cache when available (downloaded once from the upstream release, see [`crate::payload`]) and from the copy embedded in the binary otherwise.
-fn wrap_linuwux(app: &App, cmd: Vec<String>) -> Vec<String> {
-    if !app.hypervisor {
-        return cmd;
-    }
-    let Some(path) = hypervisor_path() else {
-        app.log("LinuwUx: HOME unset, skipping loader");
-        return cmd;
-    };
+fn wrap_loader(
+    app: &App,
+    cmd: Vec<String>,
+    name: &str,
+    url: &str,
+    bundled: &[u8],
+    path: &Path,
+    extra_env: &[&str],
+) -> Vec<String> {
     if !path.is_file() {
-        app.log(&format!(
-            "Extracting hypervisor loader to {}",
-            path.display()
-        ));
-        if let Some(bytes) = payload::load(
-            app,
-            LINUWUX_NAME,
-            LINUWUX_URL,
-            include_bytes!("../LinUwUx.so"),
-        ) {
-            extract_so(app, &bytes, &path);
+        app.log(&format!("Extracting loader to {}", path.display()));
+        if let Some(bytes) = payload::load(app, name, url, bundled) {
+            extract_so(app, &bytes, path);
         }
     }
     if !path.is_file() {
@@ -516,10 +515,52 @@ fn wrap_linuwux(app: &App, cmd: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = vec![
         "env".to_string(),
         format!("LD_PRELOAD={}", path.to_string_lossy()),
-        "PROTON_DISABLE_LSTEAMCLIENT=0".to_string(),
     ];
+    out.extend(extra_env.iter().map(|value| value.to_string()));
     out.extend(cmd);
     out
+}
+
+/// Prepend the LinuwUx hypervisor loader, with Steam's client library kept enabled.
+fn wrap_linuwux(app: &App, cmd: Vec<String>) -> Vec<String> {
+    if !app.hypervisor {
+        return cmd;
+    }
+    let Some(path) = hypervisor_path() else {
+        app.log("LinuwUx: HOME unset, skipping loader");
+        return cmd;
+    };
+    wrap_loader(
+        app,
+        cmd,
+        LINUWUX_NAME,
+        LINUWUX_URL,
+        include_bytes!("../LinUwUx.so"),
+        &path,
+        &["PROTON_DISABLE_LSTEAMCLIENT=0"],
+    )
+}
+
+/// Prepend the Artitux loader used by Artifact releases.
+///
+/// Artitux is a fork of LinuwUx and sets `PROTON_DISABLE_LSTEAMCLIENT=1` itself, so no Proton environment is added here.
+fn wrap_artitux(app: &App, cmd: Vec<String>) -> Vec<String> {
+    if !app.artitux {
+        return cmd;
+    }
+    let Some(path) = artitux_path() else {
+        app.log("Artitux: HOME unset, skipping loader");
+        return cmd;
+    };
+    wrap_loader(
+        app,
+        cmd,
+        ARTITUX_NAME,
+        ARTITUX_URL,
+        include_bytes!("../Artitux.so"),
+        &path,
+        &[],
+    )
 }
 
 /// Prepend a wrapper only if it is enabled and its binary exists.
@@ -769,10 +810,18 @@ pub fn apply_wrappers(app: &mut App) {
     }
     cmd = maybe_wrap(app, cmd, app.gamemode, "gamemoderun", &["gamemoderun"]);
 
-    // LinuwUx must sit at the very front of the chain: `linuwux mangohud ...`
+    // LinuwUx and Artitux must sit at the very front of the chain: `linuwux mangohud ...`
     // works, but `mangohud linuwux ...` often fails.
+    // Artitux is a fork of LinuwUx and interposes the same symbols, so it replaces the LinuwUx loader when both flags are set.
     if !app.legion {
-        cmd = wrap_linuwux(app, cmd);
+        if app.artitux {
+            if app.hypervisor {
+                app.log("Artitux (-a) and LinuwUx (-v) are both enabled, using Artitux");
+            }
+            cmd = wrap_artitux(app, cmd);
+        } else {
+            cmd = wrap_linuwux(app, cmd);
+        }
     }
 
     app.cmd = cmd;
@@ -821,12 +870,19 @@ fn hypervisor_path() -> Option<PathBuf> {
         .ok()
 }
 
+/// Target path for the Artitux loader: `$HOME/.local/share/artitux/Artitux.so`.
+fn artitux_path() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .map(|h| Path::new(&h).join(".local/share/artitux/Artitux.so"))
+        .ok()
+}
+
 /// Apply the captured custom exports, unsetting variables marked `(empty)`.
 ///
 /// After applying exports, `-F` installs the netsock loader to `$HOME/.config/SLSsteam/tools/netsock/netsock.so` when it is missing and merges it into `LD_AUDIT` (colon-separated), preserving any value the user set via `KEY=VALUE` or inherited from the environment.
 /// The loader is taken from the payload cache when available (downloaded once, see [`crate::payload`]) and from the copy embedded in the binary otherwise.
 ///
-/// The `-v` hypervisor loader is applied earlier, in [`apply_wrappers`], so that it lands at the front of the command chain instead of leaking into every wrapper process via a global `LD_PRELOAD`.
+/// The `-v` and `-a` loaders are applied earlier, in [`apply_wrappers`], so that they land at the front of the command chain instead of leaking into every wrapper process via a global `LD_PRELOAD`.
 pub fn apply_environment_modifications(app: &App) {
     for export in &app.custom_exports {
         if export.value == EMPTY_MARKER {

@@ -189,11 +189,12 @@ mod tests {
     }
 
     /// Name and upstream URL of every payload bundled in the binary.
-    fn bundled_payloads() -> [(&'static str, &'static str); 3] {
+    fn bundled_payloads() -> [(&'static str, &'static str); 4] {
         [
             (crate::eos::DLL_NAME, crate::eos::DLL_URL),
             (crate::wrappers::NETSOCK_NAME, crate::wrappers::NETSNOCK_URL),
             (crate::wrappers::LINUWUX_NAME, crate::wrappers::LINUWUX_URL),
+            (crate::wrappers::ARTITUX_NAME, crate::wrappers::ARTITUX_URL),
         ]
     }
 
@@ -280,6 +281,10 @@ mod tests {
         assert_eq!(
             release_repo(crate::wrappers::LINUWUX_URL),
             "https://github.com/brcly/linuwux-runtime"
+        );
+        assert_eq!(
+            release_repo(crate::wrappers::ARTITUX_URL),
+            "https://github.com/Lumice/artitux"
         );
     }
 

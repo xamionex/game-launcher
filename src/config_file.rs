@@ -100,6 +100,9 @@ hypervisor_modules = false
 # LinuwUx hypervisor loader, self-extracted. -v.
 hypervisor = false
 
+# Artitux loader for Artifact releases, self-extracted. -a. Replaces the LinuwUx loader when both are enabled.
+artitux = false
+
 # Custom vkd3d-proton from ~/Projects/vkd3d-proton. -V.
 enable_custom_vkd3d = false
 
@@ -189,6 +192,7 @@ pub struct FileConfig {
     pub fix_audit: Option<bool>,
     pub hypervisor_modules: Option<bool>,
     pub hypervisor: Option<bool>,
+    pub artitux: Option<bool>,
     pub enable_custom_vkd3d: Option<bool>,
     pub eos_proxy: Option<bool>,
 
@@ -281,6 +285,7 @@ fn apply(cfg: &FileConfig, app: &mut App) -> Vec<String> {
         fix_audit,
         hypervisor_modules,
         hypervisor,
+        artitux,
         enable_custom_vkd3d,
         eos_proxy,
         instances,
