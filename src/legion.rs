@@ -47,6 +47,22 @@ impl SessionSummary {
     pub fn succeeded(&self) -> bool {
         self.failed_phase().is_none()
     }
+
+    /// Outcome of the game itself, or `None` when the report is incomplete.
+    ///
+    /// A report that stops after `prefix_setup` proves the game never ran, so the session exit status has to decide.
+    pub fn game_outcome(&self) -> Option<bool> {
+        if self.phases.is_empty() {
+            return None;
+        }
+        if self.failed_phase().is_some() {
+            return Some(false);
+        }
+        self.phases
+            .iter()
+            .any(|phase| phase.phase == "workload")
+            .then_some(true)
+    }
 }
 
 /// Resolve the profile for this launch and generate one when Legion is enabled for an unknown game.
@@ -437,7 +453,7 @@ pub fn session_summary(app: &App) -> Option<SessionSummary> {
             .ok()
     });
     let dir = new.pop()?;
-    let phases = std::fs::read(dir.join("frames").join("proton-phases.json"))
+    let phases = std::fs::read(dir.join("vm").join("frames").join("proton-phases.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Vec<Phase>>(&bytes).ok())
         .unwrap_or_default();
@@ -454,6 +470,14 @@ mod tests {
             app_id: app_id.to_string(),
             exe: exe.to_string(),
             ..GameProfile::default()
+        }
+    }
+
+    fn phase(name: &str, success: bool) -> Phase {
+        Phase {
+            phase: name.to_string(),
+            success,
+            elapsed_ms: 1,
         }
     }
 
@@ -597,30 +621,29 @@ mod tests {
     }
 
     #[test]
-    fn missing_phases_are_not_reported_as_success() {
-        let summary = SessionSummary {
+    fn phase_reports_distinguish_missing_partial_and_complete_sessions() {
+        let summary = |phases| SessionSummary {
             dir: PathBuf::from("/tmp/session"),
-            phases: Vec::new(),
+            phases,
         };
-        assert!(summary.succeeded());
 
-        let summary = SessionSummary {
-            dir: PathBuf::from("/tmp/session"),
-            phases: vec![
-                Phase {
-                    phase: "prefix_setup".to_string(),
-                    success: true,
-                    elapsed_ms: 1,
-                },
-                Phase {
-                    phase: "workload".to_string(),
-                    success: false,
-                    elapsed_ms: 2,
-                },
-            ],
-        };
-        assert_eq!(summary.failed_phase(), Some("workload"));
-        assert!(!summary.succeeded());
+        let empty = summary(Vec::new());
+        assert!(empty.succeeded());
+        assert_eq!(empty.game_outcome(), None);
+
+        let partial = summary(vec![phase("prefix_setup", true)]);
+        assert_eq!(
+            partial.game_outcome(),
+            None,
+            "without the workload phase the game may never have run"
+        );
+
+        let failed = summary(vec![phase("prefix_setup", true), phase("workload", false)]);
+        assert_eq!(failed.failed_phase(), Some("workload"));
+        assert_eq!(failed.game_outcome(), Some(false));
+
+        let complete = summary(vec![phase("prefix_setup", true), phase("workload", true)]);
+        assert_eq!(complete.game_outcome(), Some(true));
     }
 
     #[test]

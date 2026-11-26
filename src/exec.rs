@@ -122,9 +122,12 @@ pub fn run_game(app: &mut App) -> i32 {
     } else {
         None
     };
-    let failed = match &legion_session {
-        Some(summary) if !summary.phases.is_empty() => !summary.succeeded(),
-        _ => exit_status != 0,
+    let failed = match legion_session
+        .as_ref()
+        .and_then(crate::legion::SessionSummary::game_outcome)
+    {
+        Some(success) => !success,
+        None => exit_status != 0,
     };
     let failure_label = match &legion_session {
         Some(summary) => summary
@@ -234,8 +237,8 @@ fn notify_legion_failure(
             );
             return;
         }
-        if !summary.phases.is_empty() {
-            // Every phase succeeded, so a nonzero session status is not a game crash.
+        if summary.game_outcome() == Some(true) {
+            // Every phase, including the application, succeeded, so a nonzero session status is not a game crash.
             return;
         }
     }
