@@ -74,6 +74,32 @@ Answer n to keep it, and make sure the directory of the install you want comes f
 
 The dxvk config always goes to the invoking user's `~/.config/dxvk/dxvk.conf`, even for root installs.
 
+## Uninstall
+
+The uninstaller removes `game`, `legion` and the runtime loaders (LinUwUx and Artitux) the installer manages:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/uninstall.sh | sh
+```
+
+The default root uninstall also removes a copy in `~/.local/bin` and prompts for sudo when needed. \
+For a user install:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/uninstall.sh | sh -s -- --user
+```
+
+`~/.config/game-launcher` (config and payload cache), `~/.config/dxvk/dxvk.conf` and `~/logs` are kept, so a reinstall keeps its settings. \
+Pass `--purge` to remove them too:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/uninstall.sh | sh -s -- --purge
+```
+
+`--purge` also removes `~/.config/SLSsteam/tools/netsock/netsock.so` and Legion run state. \
+Game folders are never modified; games patched with `-E` keep the proxy dll and the `.yes` backup. \
+Remove any `game ... -- %command%` launch options from Steam before launching those games.
+
 ## Manual Install
 
 Requires a Rust toolchain.
