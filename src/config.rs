@@ -174,7 +174,7 @@ pub struct App {
     pub hypervisor_modules: bool,
     /// Enable LinuwUx hypervisor loader via `LD_PRELOAD` (the `-v` flag).
     pub hypervisor: bool,
-    /// Enable the Artitux loader for Artifact releases via `LD_PRELOAD` (the `-a` flag).
+    /// Enable Artitux for Artifact releases through the official artitux launcher (the `-a` flag).
     pub artitux: bool,
     /// Swap the game's `EOSSDK-Win64-Shipping.dll` for the EOS proxy (the `-E` flag).
     pub eos_proxy: bool,

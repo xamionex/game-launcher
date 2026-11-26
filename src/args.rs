@@ -220,7 +220,7 @@ pub fn print_help(prog: &str) {
     eprintln!("  -h            Hypervisor kernel modules: unload KVM (kills running VMs), load cpuid_fault_emulation, restore the previous state when the game exits (asks for the root password)");
     eprintln!("  -v            Enable hypervisor loader (LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so, sets PROTON_DISABLE_LSTEAMCLIENT=0)");
     eprintln!("                Might require you to disable mangohud with -H");
-    eprintln!("  -a            Enable Artitux loader for Artifact releases (LD_PRELOAD=$HOME/.local/share/artitux/Artitux.so, replaces -v)");
+    eprintln!("  -a            Enable Artitux for Artifact releases through the official artitux launcher (installed by install.sh, replaces -v)");
     eprintln!("  -E            Enable EOS-Proxy (replaces the game's EOSSDK-Win64-Shipping.dll, skips games already patched)");
     eprintln!("  -K            Run the game inside Legion KVM (Proton games only; disables -v, -a, -h, -p, -F, -f, -L and -P)");
     eprintln!();

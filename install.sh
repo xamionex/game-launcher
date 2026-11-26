@@ -24,7 +24,7 @@
 # The dxvk config always goes to the invoking user's ~/.config/dxvk/dxvk.conf, even for root installs.
 # Payloads go to the invoking user's config directory (honoring XDG_CONFIG_HOME), and a failed payload fetch is only a warning: the binary embeds fallback copies.
 # LinUwUx goes to ~/.local/share/linuwux/LinUwUx.so; a previous ~/.local/lib/liblinuwux.so is removed.
-# Artitux goes to ~/.local/share/artitux/Artitux.so.
+# Artitux is installed by its upstream installer: ~/.local/bin/artitux plus ~/.local/share/artitux/Artitux.so, and /usr/local/bin/artitux for a root install.
 set -eu
 
 REPO="xamionex/game-launcher"
@@ -32,6 +32,7 @@ BIN_NAME="game"
 LEGION_NAME="legion"
 LEGION_REPO="https://github.com/brcly/legion-kvm"
 LEGION_COMMIT="0197712f1a12ce70411d575b33306349c7b19c37"
+ARTITUX_INSTALL_URL="https://raw.githubusercontent.com/Lumice/artitux/main/install.sh"
 # Overridable for testing and forks.
 API="${GAME_LAUNCHER_API:-https://api.github.com/repos/$REPO/releases/latest}"
 RAW_URL="${GAME_LAUNCHER_RAW:-https://raw.githubusercontent.com/$REPO/main}"
@@ -136,7 +137,7 @@ for arg in "$@"; do
 Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh
        curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- [--user] [--legion]
 
-Installs the game-launcher binary, the dxvk config and refreshes the payload cache (EOS-Proxy dll, netsock, linuwux and artitux loaders).
+Installs the game-launcher binary, the dxvk config, refreshes the payload cache (EOS-Proxy dll and netsock loader), refreshes LinUwUx and installs Artitux with its upstream installer.
 
 Root install (default, preferred):
   game goes to /usr/local/bin/game, works in Steam Deck gaming mode without specifying the full path.
@@ -154,7 +155,8 @@ Source: $LEGION_REPO/tree/$LEGION_COMMIT
 The dxvk config always goes to ~/.config/dxvk/dxvk.conf for the invoking user.
 Payloads go to the invoking user's config directory.
 LinUwUx goes to ~/.local/share/linuwux/LinUwUx.so.
-Artitux goes to ~/.local/share/artitux/Artitux.so.
+Artitux is installed by its upstream installer: ~/.local/bin/artitux plus ~/.local/share/artitux/Artitux.so.
+A root install also links /usr/local/bin/artitux.
 EOF
             exit 0
             ;;
@@ -193,7 +195,7 @@ PAYLOAD_DIR="$CONFIG_HOME/game-launcher/payloads"
 # The loaders have their own home; older installers dropped LinUwUx into ~/.local/lib.
 LINUWUX_DIR="$TARGET_HOME/.local/share/linuwux"
 OLD_LINUWUX="$TARGET_HOME/.local/lib/liblinuwux.so"
-ARTITUX_DIR="$TARGET_HOME/.local/share/artitux"
+ARTITUX_BIN="$TARGET_HOME/.local/bin/artitux"
 
 command -v curl >/dev/null 2>&1 || die "curl is required but not installed"
 command -v mktemp >/dev/null 2>&1 || die "mktemp is required but not installed"
@@ -316,22 +318,72 @@ else
     warn "could not create $LINUWUX_DIR, skipping linuwux refresh"
 fi
 
-# Artitux lives under ~/.local/share/artitux, matching its upstream installer.
-info "refreshing artitux in $ARTITUX_DIR"
+# Artitux is installed by its own installer so the official launcher script, which handles
+# LD_PRELOAD, Steam app IDs and artitux_kmod, is present and stays current.
+info "installing artitux with the upstream installer"
 
-if mkdir -p "$ARTITUX_DIR"; then
-    fix_owner "$ARTITUX_DIR"
-    if curl -fsSL --connect-timeout 10 --max-time 300 -o "$ARTITUX_DIR/Artitux.so.part" \
-        "https://github.com/Lumice/artitux/releases/latest/download/Artitux.so" \
-        && mv "$ARTITUX_DIR/Artitux.so.part" "$ARTITUX_DIR/Artitux.so"; then
-        chown "$TARGET_USER" "$ARTITUX_DIR/Artitux.so" 2>/dev/null || true
-        info "artitux updated"
-    else
-        rm -f "$ARTITUX_DIR/Artitux.so.part"
-        warn "could not fetch Artitux.so, the launcher will use its bundled copy"
-    fi
+if [ "$MODE" = "root" ]; then
+    ARTITUX_ARGS="--global"
 else
-    warn "could not create $ARTITUX_DIR, skipping artitux refresh"
+    ARTITUX_ARGS=""
+fi
+
+run_artitux_installer() {
+    artitux_command="set -o pipefail; curl -fsSL '$ARTITUX_INSTALL_URL' | bash -s -- $ARTITUX_ARGS"
+    if [ "$(id -u)" -eq 0 ] && [ "$TARGET_USER" != "root" ]; then
+        if command -v sudo >/dev/null 2>&1; then
+            if sudo -u "$TARGET_USER" env HOME="$TARGET_HOME" USER="$TARGET_USER" LOGNAME="$TARGET_USER" \
+                bash -c "$artitux_command"; then
+                return 0
+            fi
+            # The launcher is already usable even when only the optional global link step failed.
+            if [ -x "$ARTITUX_BIN" ]; then
+                warn "artitux installed, but its installer did not finish cleanly"
+                return 0
+            fi
+            warn "sudo could not run the artitux installer as $TARGET_USER"
+        fi
+        if command -v runuser >/dev/null 2>&1; then
+            if runuser -u "$TARGET_USER" -- env HOME="$TARGET_HOME" USER="$TARGET_USER" LOGNAME="$TARGET_USER" \
+                bash -c "$artitux_command"; then
+                return 0
+            fi
+            if [ -x "$ARTITUX_BIN" ]; then
+                warn "artitux installed, but its installer did not finish cleanly"
+                return 0
+            fi
+            warn "runuser could not run the artitux installer as $TARGET_USER"
+        fi
+        return 1
+    fi
+    if HOME="$TARGET_HOME" bash -c "$artitux_command"; then
+        return 0
+    fi
+    if [ -x "$ARTITUX_BIN" ]; then
+        warn "artitux installed, but its installer did not finish cleanly"
+        return 0
+    fi
+    return 1
+}
+
+if run_artitux_installer; then
+    info "artitux installed"
+else
+    warn "the artitux installer did not finish cleanly"
+fi
+
+# The upstream installer creates /usr/local/bin/artitux with --global, but a nested sudo can be unavailable.
+# A root install still needs the link for PATH-based launches.
+if [ "$MODE" = "root" ] && [ -x "$ARTITUX_BIN" ]; then
+    if [ -e /usr/local/bin/artitux ] && [ ! -L /usr/local/bin/artitux ]; then
+        warn "leaving existing /usr/local/bin/artitux (not a symlink)"
+    elif ln -sf "$ARTITUX_BIN" /usr/local/bin/artitux; then
+        info "artitux launcher linked at /usr/local/bin/artitux"
+    else
+        warn "could not link /usr/local/bin/artitux"
+    fi
+elif [ ! -x "$ARTITUX_BIN" ]; then
+    warn "artitux launcher is missing; -a will fall back to LD_PRELOAD"
 fi
 
 info "done"

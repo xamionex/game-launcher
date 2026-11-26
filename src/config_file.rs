@@ -100,7 +100,7 @@ hypervisor_modules = false
 # LinuwUx hypervisor loader, self-extracted. -v.
 hypervisor = false
 
-# Artitux loader for Artifact releases, self-extracted. -a. Replaces the LinuwUx loader when both are enabled.
+# Artitux for Artifact releases through the official artitux launcher, installed by install.sh. -a. Replaces the LinuwUx loader when both are enabled.
 artitux = false
 
 # Custom vkd3d-proton from ~/Projects/vkd3d-proton. -V.

@@ -541,13 +541,45 @@ fn wrap_linuwux(app: &App, cmd: Vec<String>) -> Vec<String> {
     )
 }
 
-/// Prepend the Artitux loader used by Artifact releases.
+/// Locate the official Artitux launcher, preferring the one next to the running `game` binary.
+fn artitux_binary() -> Option<PathBuf> {
+    let root_game = std::env::current_exe()
+        .map(|exe| exe == Path::new("/usr/local/bin/game"))
+        .unwrap_or(false);
+    let home = dirs::home_dir();
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if root_game {
+        candidates.push(PathBuf::from("/usr/local/bin/artitux"));
+    }
+    if let Some(home) = &home {
+        candidates.push(home.join(".local/bin/artitux"));
+    }
+    if !root_game {
+        candidates.push(PathBuf::from("/usr/local/bin/artitux"));
+    }
+    for candidate in candidates {
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+    }
+    find_in_path("artitux")
+}
+
+/// Prepend the official Artitux launcher.
 ///
-/// Artitux is a fork of LinuwUx and sets `PROTON_DISABLE_LSTEAMCLIENT=1` itself, so no Proton environment is added here.
+/// The launcher sets up `LD_PRELOAD`, exports the Steam app ID from `steam_settings/steam_appid.txt` and arms the optional `artitux_kmod` (`/dev/artitux`) before it execs the game.
+/// Falling back to a direct `LD_PRELOAD` keeps a manual build usable when the launcher is missing; `install.sh` installs it.
 fn wrap_artitux(app: &App, cmd: Vec<String>) -> Vec<String> {
     if !app.artitux {
         return cmd;
     }
+    if let Some(binary) = artitux_binary() {
+        app.log(&format!("Artitux launcher: {}", binary.display()));
+        let binary = binary.to_string_lossy().into_owned();
+        return prepend(&[&binary], &cmd);
+    }
+    app.log("Artitux launcher not found, falling back to LD_PRELOAD; install it for Steam app ID and artitux_kmod support");
     let Some(path) = artitux_path() else {
         app.log("Artitux: HOME unset, skipping loader");
         return cmd;

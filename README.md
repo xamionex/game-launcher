@@ -26,8 +26,9 @@ This sets `WAYLANDDRV_PRIMARY_MONITOR` and only applies while Wayland is enabled
 
 The preferred way to install is the curl installer. \
 It downloads the latest release binaries, installs `game` and, with `--legion`, `legion` next to each other, \
-installs the dxvk config to `~/.config/dxvk/dxvk.conf` \
-and refreshes the payload cache in `~/.config/game-launcher/payloads`.
+installs the dxvk config to `~/.config/dxvk/dxvk.conf`, \
+refreshes the payload cache in `~/.config/game-launcher/payloads` \
+and installs Artitux with its upstream installer, including the official `artitux` launcher.
 All requested binaries are downloaded and checked for a valid ELF header before anything is installed, so a missing or broken asset leaves the existing install untouched.
 
 Root install (preferred):
@@ -76,7 +77,8 @@ The dxvk config always goes to the invoking user's `~/.config/dxvk/dxvk.conf`, e
 
 ## Uninstall
 
-The uninstaller removes `game`, `legion` and the runtime loaders (LinUwUx and Artitux) the installer manages:
+The uninstaller removes `game`, the LinUwUx loader and the other installer-managed files. \
+It asks before removing `legion` and `artitux`; answer `n` to keep either. Without a terminal to ask on, both are removed.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/uninstall.sh | sh
@@ -125,9 +127,10 @@ ln -s $PWD/dxvk ~/.config/dxvk
 `cargo build` only produces `game`. \
 For `-K`, install Legion with the [curl installer](#automatic-install) and `--legion`, put a packaged `legion` next to the `game` binary, put it on `PATH`, or set `legion_path` in the config.
 
-netsock and the game loaders (LinUwUx.so and Artitux.so) are embedded in the binary and self-extract on first use, no setup needed. \
-netsock goes to `$HOME/.config/SLSsteam/tools/netsock/`, LinUwUx to `$HOME/.local/share/linuwux/` and Artitux to `$HOME/.local/share/artitux/`. \
-All of them are also fetched from their upstream releases into `~/.config/game-launcher/payloads/`, see [Payloads](#payloads).
+netsock and LinUwUx.so are embedded in the binary and self-extract on first use, no setup needed. \
+netsock goes to `$HOME/.config/SLSsteam/tools/netsock/` and LinUwUx to `$HOME/.local/share/linuwux/`. \
+Artitux is installed by the [installer](#automatic-install); the binary keeps a fallback `.so` and fetches it into the payload cache, see [Payloads](#payloads). \
+For full `-a` behavior with a manual build, install Artitux with its own installer: `curl -fsSL https://raw.githubusercontent.com/Lumice/artitux/main/install.sh | bash`.
 
 Hypervisor setup and usage guide: https://cs.rin.ru/forum/viewtopic.php?f=20&t=160056 \
 Hypervisor requires mangohud to be disabled sometimes to fully work (`-vH`); `-h` handles the kernel module, only needed on AMD Ryzen on AM4 (older than 7000) and the Steam Deck, see [Hypervisor kernel modules](#hypervisor-kernel-modules).
@@ -207,7 +210,7 @@ Disabled by default (use the flag to enable):
 | `-V` | Enable custom vkd3d-proton loading                                                                                                                                                       |
 | `-h` | Hypervisor kernel modules: unload KVM (killing any running virtual machines), load `cpuid_fault_emulation` before the game, and restore the previous module state when it exits, as root |
 | `-v` | Enable hypervisor loader: `LD_PRELOAD=$HOME/.local/share/linuwux/LinUwUx.so` and `PROTON_DISABLE_LSTEAMCLIENT=0` (self-extracts if missing)                                              |
-| `-a` | Enable the Artitux loader for Artifact releases: `LD_PRELOAD=$HOME/.local/share/artitux/Artitux.so` (self-extracts if missing, replaces `-v` when both are enabled)                        |
+| `-a` | Enable Artitux for Artifact releases through the official `artitux` launcher (installed by `install.sh`, replaces `-v` when both are enabled)                                             |
 | `-E` | Enable EOS-Proxy: replaces the game's `EOSSDK-Win64-Shipping.dll` with the proxy, skipped when the game is already patched                                                               |
 | `-K` | Run a Proton game inside Legion KVM for this launch, overriding a profile's `enabled = false`; errors on a native Linux game                                                            |
 
@@ -253,13 +256,15 @@ or when ananicy-cpp is running, since both renice processes themselves.
 - a step that fails is rolled back to the state found before the launch and reported with a notification; the game still starts.
 - everything runs as root through `modprobe`: when the launcher runs in a terminal, `sudo` asks there; from Steam (no terminal) it uses a cached credential, otherwise the polkit dialog (`pkexec`, the KDE/GNOME authentication window) or a graphical password prompt (`zenity`/`kdialog`/`yad` feeding `sudo -S`). The password is asked once per phase, and polkit/sudo may remember it, so the restore at game exit often does not ask again. Unloading KVM kills any running virtual machines.
 
-`-h` is independent of `-v` and `-a`: `-h` only touches the kernel modules, while the loaders only go into `LD_PRELOAD`, so setups with their own module handling can use `-v` or `-a` alone.
+`-h` is independent of `-v` and `-a`: `-h` only touches the kernel modules, `-v` puts LinUwUx in `LD_PRELOAD`, and `-a` runs the Artitux launcher, so setups with their own module handling can use `-v` or `-a` alone.
 
 ## Artitux (`-a`)
 
 [Artitux](https://github.com/Lumice/artitux) is a fork of LinUwUx for Artifact releases. \
-It loads through `LD_PRELOAD` like LinUwUx, but it covers a narrower set of games, so it does not replace `-v` for games that already work with LinUwUx; that is also what Artitux's own README recommends. \
-`-a` puts `$HOME/.local/share/artitux/Artitux.so` in `LD_PRELOAD` and self-extracts it when missing, following the same payload cache and installer refresh as LinUwUx. \
+It covers a narrower set of games than LinUwUx, so it does not replace `-v` for games that already work with LinUwUx; that is also what Artitux's own README recommends. \
+`-a` runs the official `artitux` launcher, which sets up `LD_PRELOAD`, exports the Steam app ID from `steam_settings/steam_appid.txt`, and arms the optional `artitux_kmod` (`/dev/artitux`) before exec. \
+The [installer](#automatic-install) installs and updates that launcher with Artitux's upstream installer: `~/.local/bin/artitux` for a user install, plus `/usr/local/bin/artitux` for a root install. \
+If the launcher is missing, `-a` falls back to putting `$HOME/.local/share/artitux/Artitux.so` in `LD_PRELOAD`, which keeps the game starting but does not arm `artitux_kmod` or export Steam app IDs. \
 Artitux sets `PROTON_DISABLE_LSTEAMCLIENT=1` itself, while `-v` sets it to `0`. \
 When both `-a` and `-v` are enabled, `-a` wins because the two loaders interpose the same symbols.
 
@@ -414,19 +419,20 @@ Four payloads are fetched from their upstream releases and cached in
 | `EOSSDK-Win64-Shipping.dll` | [eos-proxy](https://github.com/yesyes0649/eos-proxy) releases                              | `-E`    |
 | `netsock.so`                | [steamnetsock-patch](https://github.com/yesyes0649/steamnetsock-patch) releases (`fix.so`) | `-F`    |
 | `LinUwUx.so`                | [linuwux-runtime](https://github.com/brcly/linuwux-runtime) releases (`LinUwUx.so`)        | `-v`    |
-| `Artitux.so`                | [artitux](https://github.com/Lumice/artitux) releases (`Artitux.so`)                       | `-a`    |
+| `Artitux.so`                | [artitux](https://github.com/Lumice/artitux) releases (`Artitux.so`)                       | `-a` fallback |
 
 Each payload is downloaded once. \
 If the download fails (offline, GitHub unreachable, curl missing) the copy embedded in the binary is used instead, and a failed download is not cached, so a later launch can still pick up the latest release. \
 Delete the cached file to force a refresh. \
-The [installer](#automatic-install) also refreshes all four payloads on every install or reinstall.
+The [installer](#automatic-install) also refreshes EOS-Proxy, netsock and LinUwUx, and installs the latest Artitux library with its launcher, on every install or reinstall.
 
 The copies embedded in the binary are kept current by the test suite.
 `cargo test` fetches every upstream release and compares it with the file in the repository: an outdated copy is replaced with the upstream one and the test fails, so the update gets committed and the next build embeds it.
 When GitHub or curl cannot be reached the payloads it could not check are reported (run `cargo test -- --nocapture` to see them) and the test passes, so an offline test run still works.
 
-The loaders are only written to their target path (`LinUwUx.so` to `~/.local/share/linuwux`, `Artitux.so` to `~/.local/share/artitux`, `netsock.so` to `~/.config/SLSsteam/tools/netsock`) when that file is missing, so an already extracted loader is left alone.
+The fallback loaders are only written to their target path (`LinUwUx.so` to `~/.local/share/linuwux`, `Artitux.so` to `~/.local/share/artitux`, `netsock.so` to `~/.config/SLSsteam/tools/netsock`) when that file is missing, so an already extracted loader is left alone.
 Delete it to let the next launch extract the cached, up to date copy.
+The installer refreshes LinUwUx.so directly and installs Artitux, including its launcher, through the upstream installer.
 
 ## EOS-Proxy (`-E`)
 

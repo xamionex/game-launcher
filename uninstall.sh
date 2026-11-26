@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Uninstaller for game-launcher.
 #
-# Removes the files install.sh puts on disk: the game and legion binaries in
-# /usr/local/bin and/or ~/.local/bin, plus the LinUwUx and Artitux loaders that
-# the installer refreshes.
+# Removes the files install.sh puts on disk: game, the LinUwUx loader and the
+# other installer-managed files. Legion and Artitux are optional, so the
+# uninstaller asks before removing them.
 #
 # User data is kept by default: ~/.config/game-launcher (config.toml and the payload
 # cache), ~/.config/dxvk/dxvk.conf and the logs in ~/logs. Pass --purge to remove it.
@@ -14,13 +14,17 @@
 #   curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/uninstall.sh | sh -s -- --purge
 #
 # Root uninstall (default, preferred):
-#   - removes /usr/local/bin/game and /usr/local/bin/legion
-#   - also removes a user install in ~/.local/bin
+#   - removes /usr/local/bin/game
+#   - asks before removing legion and artitux, including their user copies
+#   - also removes the user game copy in ~/.local/bin
 #   - re-runs itself with sudo when not already root
 #
 # User uninstall (--user):
-#   - removes ~/.local/bin/game and ~/.local/bin/legion
+#   - removes ~/.local/bin/game
+#   - asks before removing the user legion and artitux installs
 #   - a root install is reported and left alone
+#
+# Without a terminal to ask on, legion and artitux are removed.
 #
 # --purge also removes:
 #   - ~/.config/game-launcher (config.toml and the payload cache)
@@ -60,14 +64,17 @@ for arg in "$@"; do
 Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/uninstall.sh | sh
        curl -fsSL https://raw.githubusercontent.com/$REPO/main/uninstall.sh | sh -s -- [--user] [--purge]
 
-Removes game and legion, plus the LinUwUx and Artitux loaders the installer refreshes.
+Removes game, the LinUwUx loader and the other installer-managed files.
+Asks before removing legion and artitux; answer n to keep one.
+Without a terminal to ask on, both are removed.
 
 Root uninstall (default, preferred):
-  removes /usr/local/bin/game and /usr/local/bin/legion, and any copy in ~/.local/bin.
-  Prompts for sudo when needed.
+  removes /usr/local/bin/game and any user copy in ~/.local/bin.
+  asks about legion and artitux. Prompts for sudo when needed.
 
 User uninstall (--user):
-  removes ~/.local/bin/game and ~/.local/bin/legion. A root install is reported and left alone.
+  removes ~/.local/bin/game and asks about the user legion and artitux installs.
+  A root copy is reported and left alone.
 
 --purge:
   also removes ~/.config/game-launcher (config.toml and payload cache),
@@ -173,23 +180,69 @@ remove_bin() {
     remove_file "$TARGET_HOME/.local/bin/$name"
 }
 
+# True when this uninstall will find a binary with this name.
+has_bin() {
+    name="$1"
+    if [ "$MODE" = "root" ] && { [ -e "/usr/local/bin/$name" ] || [ -L "/usr/local/bin/$name" ]; }; then
+        return 0
+    fi
+    [ -e "$TARGET_HOME/.local/bin/$name" ] || [ -L "$TARGET_HOME/.local/bin/$name" ]
+}
+
+# Ask whether to remove an optional component.
+#
+# The script is usually piped from curl, so the answer is read from the terminal instead of stdin.
+# Without a terminal the component is removed, matching the uninstaller's purpose.
+ask_remove() {
+    label="$1"
+    if ! (exec 3</dev/tty) 2>/dev/null; then
+        info "no terminal to ask on, removing $label"
+        return 0
+    fi
+    printf 'Remove %s? [Y/n] ' "$label" >/dev/tty
+    answer=""
+    read -r answer </dev/tty || true
+    case "$answer" in
+        [Nn]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 remove_bin "game"
-remove_bin "legion"
+
+if has_bin "legion"; then
+    if ask_remove "legion"; then
+        remove_bin "legion"
+    else
+        info "kept legion"
+    fi
+fi
+
+if has_bin "artitux" \
+    || [ -e "$TARGET_HOME/.local/share/artitux/Artitux.so" ] \
+    || [ -L "$TARGET_HOME/.local/share/artitux/Artitux.so" ]; then
+    if ask_remove "artitux"; then
+        remove_bin "artitux"
+        remove_file "$TARGET_HOME/.local/share/artitux/Artitux.so"
+        prune_dir "$TARGET_HOME/.local/share/artitux"
+    else
+        info "kept artitux"
+    fi
+fi
 
 if [ "$MODE" = "user" ]; then
     if [ -e /usr/local/bin/game ] || [ -L /usr/local/bin/game ] \
-        || [ -e /usr/local/bin/legion ] || [ -L /usr/local/bin/legion ]; then
+        || [ -e /usr/local/bin/legion ] || [ -L /usr/local/bin/legion ] \
+        || [ -e /usr/local/bin/artitux ] || [ -L /usr/local/bin/artitux ]; then
         warn "a root install is still present in /usr/local/bin; run the uninstaller without --user to remove it"
     fi
 fi
 
-# The loaders are refreshed by the installer and only used by this launcher,
-# so they go with it. Directories are removed only when nothing else is in them.
+# The LinUwUx loader is refreshed by the installer and only used by this launcher,
+# so it goes with it. Directories are removed only when nothing else is in them.
 remove_file "$TARGET_HOME/.local/share/linuwux/LinUwUx.so"
 prune_dir "$TARGET_HOME/.local/share/linuwux"
 remove_file "$TARGET_HOME/.local/lib/liblinuwux.so"
-remove_file "$TARGET_HOME/.local/share/artitux/Artitux.so"
-prune_dir "$TARGET_HOME/.local/share/artitux"
 
 if [ "$PURGE" -eq 1 ]; then
     remove_tree "$CONFIG_HOME/game-launcher"

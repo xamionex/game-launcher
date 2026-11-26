@@ -270,7 +270,7 @@ const FIELDS: &[Field] = &[
         key: "artitux",
         label: "Artitux",
         flag: "-a",
-        help: "Artitux loader in LD_PRELOAD (Artifact games)",
+        help: "Official artitux launcher (Artifact games)",
         section: "Disabled by default",
     },
     Field {
