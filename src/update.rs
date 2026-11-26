@@ -114,32 +114,47 @@ fn install_target(exe: &Path, home: &Path, root_installed: bool, user_installed:
 }
 
 /// The shell line that updates `install` through the installer, exactly as the README documents it.
-fn installer_command(raw: &str, install: Install) -> String {
-    match install {
+fn installer_command(raw: &str, install: Install, legion: bool) -> String {
+    let mut command = match install {
         Install::User => format!("curl -fsSL {raw}/install.sh | sh -s -- --user"),
-        Install::Root => format!("curl -fsSL {raw}/install.sh | sh"),
+        Install::Root => format!("curl -fsSL {raw}/install.sh | sh -s --"),
+    };
+    if legion {
+        command.push_str(" --legion");
     }
+    command
 }
 
-/// Which install this process should update.
-fn target() -> Result<Install, String> {
+/// True when `legion` is installed next to `game`, so an update keeps the opt-in.
+fn legion_installed(install: Install, home: &Path) -> bool {
+    let bin_dir = match install {
+        Install::Root => PathBuf::from("/usr/local/bin"),
+        Install::User => home.join(".local/bin"),
+    };
+    bin_dir.join("legion").is_file()
+}
+
+/// Which install this process should update, and whether it opted into Legion.
+fn target() -> Result<(Install, bool), String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("could not resolve the running binary: {e}"))?;
     let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
     let home = PathBuf::from(home);
     let user_bin = home.join(".local/bin/game");
-    Ok(install_target(
+    let install = install_target(
         &exe,
         &home,
         Path::new(ROOT_BIN).is_file(),
         user_bin.is_file(),
-    ))
+    );
+    let legion = legion_installed(install, &home);
+    Ok((install, legion))
 }
 
 /// `-U`: check the published version, then update the install the user is running.
 pub fn run() -> Result<(), String> {
     println!("game {VERSION}");
-    let install = target()?;
+    let (install, legion) = target()?;
     let raw = raw_url();
 
     let latest = latest_release_tag()?;
@@ -147,7 +162,10 @@ pub fn run() -> Result<(), String> {
         Some(true) => {}
         Some(false) => {
             println!("game {VERSION} is already the newest release ({latest}), nothing to update.");
-            println!("Reinstall it with: {}", installer_command(&raw, install));
+            println!(
+                "Reinstall it with: {}",
+                installer_command(&raw, install, legion)
+            );
             return Ok(());
         }
         None => {
@@ -166,7 +184,7 @@ pub fn run() -> Result<(), String> {
     );
     let status = Command::new("sh")
         .arg("-c")
-        .arg(installer_command(&raw, install))
+        .arg(installer_command(&raw, install, legion))
         .status()
         .map_err(|e| format!("could not run the installer: {e}"))?;
     if !status.success() {
@@ -234,12 +252,33 @@ mod tests {
     fn installer_commands_match_the_readme() {
         let raw = "https://raw.githubusercontent.com/xamionex/game-launcher/main";
         assert_eq!(
-            installer_command(raw, Install::Root),
-            "curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh"
+            installer_command(raw, Install::Root, false),
+            "curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s --"
         );
         assert_eq!(
-            installer_command(raw, Install::User),
+            installer_command(raw, Install::Root, true),
+            "curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --legion"
+        );
+        assert_eq!(
+            installer_command(raw, Install::User, false),
             "curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --user"
         );
+        assert_eq!(
+            installer_command(raw, Install::User, true),
+            "curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --user --legion"
+        );
+    }
+
+    #[test]
+    fn an_installed_legion_keeps_the_update_opt_in() {
+        let home = std::env::temp_dir().join(format!("game_update_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+
+        assert!(!legion_installed(Install::User, &home));
+        std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+        std::fs::write(home.join(".local/bin/legion"), b"").unwrap();
+        assert!(legion_installed(Install::User, &home));
+
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

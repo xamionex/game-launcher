@@ -25,10 +25,10 @@ This sets `WAYLANDDRV_PRIMARY_MONITOR` and only applies while Wayland is enabled
 ## Automatic Install
 
 The preferred way to install is the curl installer. \
-It downloads the latest release binaries, installs `game` and (unless `--no-legion` is given) `legion` next to each other, \
+It downloads the latest release binaries, installs `game` and, with `--legion`, `legion` next to each other, \
 installs the dxvk config to `~/.config/dxvk/dxvk.conf` \
 and refreshes the payload cache in `~/.config/game-launcher/payloads`.
-Both binaries are downloaded and checked for a valid ELF header before either is installed, so a missing or broken asset leaves the existing install untouched.
+All requested binaries are downloaded and checked for a valid ELF header before anything is installed, so a missing or broken asset leaves the existing install untouched.
 
 Root install (preferred):
 
@@ -36,7 +36,7 @@ Root install (preferred):
 curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh
 ```
 
-Installs `game` and `legion` to `/usr/local/bin`. \
+Installs `game` to `/usr/local/bin`, plus `legion` when `--legion` is given. \
 This is the recommended way to install, because Steam Deck gaming mode (the gamescope session) does not source your shell profiles, \
 so `~/.local/bin` won't be in `PATH` and Steam will fail to find the `game` binary. \
 With the root install you can use `game -- %command%` in Launch Options without specifying the entire path.
@@ -47,14 +47,16 @@ User install:
 curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --user
 ```
 
-Installs `game` and `legion` to `~/.local/bin`. Make sure `~/.local/bin` is on your `PATH`. \
+Installs `game` to `~/.local/bin`, plus `legion` when `--legion` is given. Make sure `~/.local/bin` is on your `PATH`. \
 Gaming mode may not find it, prefer the root install.
 
-To install only `game`, pass `--no-legion`:
+Legion is opt-in. To install it alongside `game`, pass `--legion`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --no-legion
+curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --legion
 ```
+
+For a user install, pass both flags: `sh -s -- --user --legion`.
 
 Legion KVM is licensed under AGPL-3.0-only and runs as a separate program, so its license, notice and source location are published with each release. \
 The installer prints the pinned source URL, and `legion --version` reports the build. \
@@ -65,7 +67,7 @@ It reports the version it is running, compares it with the newest release, and t
 the root install when it started from `/usr/local/bin`, the user install when it started from `~/.local/bin`, and otherwise whichever of the two is installed (the root install, the README's preferred way, when neither is). \
 A build that is newer than the newest release is left alone, so a development build is not downgraded.
 
-`-U` runs the installer without `--no-legion`, so it updates `legion` together with `game`.
+`-U` passes `--legion` when `legion` is installed next to `game`, so an opted-in Legion install stays updated while a game-only install stays game-only.
 
 When both `/usr/local/bin/game` and `~/.local/bin/game` exist, the installer reports the other copy and asks whether to remove it, since `PATH` order decides which one runs. \
 Answer n to keep it, and make sure the directory of the install you want comes first in `PATH`.
@@ -95,7 +97,7 @@ ln -s $PWD/dxvk ~/.config/dxvk
 ```
 
 `cargo build` only produces `game`. \
-For `-K`, install Legion with the [curl installer](#automatic-install), put a packaged `legion` next to the `game` binary, put it on `PATH`, or set `legion_path` in the config.
+For `-K`, install Legion with the [curl installer](#automatic-install) and `--legion`, put a packaged `legion` next to the `game` binary, put it on `PATH`, or set `legion_path` in the config.
 
 netsock and the game loaders (LinUwUx.so and Artitux.so) are embedded in the binary and self-extract on first use, no setup needed. \
 netsock goes to `$HOME/.config/SLSsteam/tools/netsock/`, LinUwUx to `$HOME/.local/share/linuwux/` and Artitux to `$HOME/.local/share/artitux/`. \

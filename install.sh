@@ -7,18 +7,18 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --user
-#   curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --no-legion
+#   curl -fsSL https://raw.githubusercontent.com/xamionex/game-launcher/main/install.sh | sh -s -- --legion
 #
 # Root install (default, preferred):
-#   - binaries go to /usr/local/bin/game and /usr/local/bin/legion
+#   - game goes to /usr/local/bin/game; --legion also installs /usr/local/bin/legion
 #   - works in Steam Deck gaming mode without specifying the full path
 #   - re-runs itself with sudo when not already root
 #
 # User install (--user):
-#   - binaries go to ~/.local/bin/game and ~/.local/bin/legion
+#   - game goes to ~/.local/bin/game; --legion also installs ~/.local/bin/legion
 #   - gaming mode may not find them, see the README
 #
-# --no-legion installs only game. Legion KVM is AGPL-3.0-only and is invoked as a separate program.
+# Legion is opt-in with --legion. Legion KVM is AGPL-3.0-only and is invoked as a separate program.
 # Source: https://github.com/brcly/legion-kvm/tree/0197712f1a12ce70411d575b33306349c7b19c37
 #
 # The dxvk config always goes to the invoking user's ~/.config/dxvk/dxvk.conf, even for root installs.
@@ -118,7 +118,7 @@ check_conflicting_install() {
 }
 
 MODE="root"
-INSTALL_LEGION=1
+INSTALL_LEGION=0
 for arg in "$@"; do
     case "$arg" in
         --user)
@@ -128,24 +128,25 @@ for arg in "$@"; do
             # Internal mode used by the sudo re-run below.
             MODE="root"
             ;;
-        --no-legion)
-            INSTALL_LEGION=0
+        --legion)
+            INSTALL_LEGION=1
             ;;
         --help|-h)
             cat <<EOF
-Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh [-- --user] [--no-legion]
+Usage: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh
+       curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- [--user] [--legion]
 
-Installs the game-launcher binaries, the dxvk config and refreshes the payload cache (EOS-Proxy dll, netsock, linuwux and artitux loaders).
+Installs the game-launcher binary, the dxvk config and refreshes the payload cache (EOS-Proxy dll, netsock, linuwux and artitux loaders).
 
 Root install (default, preferred):
-  binaries at /usr/local/bin/game and /usr/local/bin/legion, works in Steam Deck gaming mode without specifying the full path.
+  game goes to /usr/local/bin/game, works in Steam Deck gaming mode without specifying the full path.
   Prompts for sudo when needed.
 
 User install (--user):
-  binaries at ~/.local/bin/game and ~/.local/bin/legion.
+  game goes to ~/.local/bin/game.
 
---no-legion:
-  install only game. Legion is then unavailable, and -K reports that the legion binary is missing.
+--legion:
+  also install legion to /usr/local/bin/legion or ~/.local/bin/legion. Without it, -K reports that the legion binary is missing.
 
 An existing copy of either binary in the other location is reported, and removed when you confirm, so PATH order cannot pick a stale one.
 Legion KVM is AGPL-3.0-only and is invoked as a separate program.
@@ -158,7 +159,7 @@ EOF
             exit 0
             ;;
         *)
-            die "unknown argument: $arg (use --user for a user install, --no-legion to skip Legion, --help for usage)"
+            die "unknown argument: $arg (use --user for a user install, --legion to install Legion, --help for usage)"
             ;;
     esac
 done
@@ -168,8 +169,8 @@ done
 if [ "$MODE" = "root" ] && [ "$(id -u)" -ne 0 ]; then
     if command -v sudo >/dev/null 2>&1; then
         REEXEC_ARGS="--root"
-        if [ "$INSTALL_LEGION" -eq 0 ]; then
-            REEXEC_ARGS="$REEXEC_ARGS --no-legion"
+        if [ "$INSTALL_LEGION" -eq 1 ]; then
+            REEXEC_ARGS="$REEXEC_ARGS --legion"
         fi
         info "root install requested, re-running with sudo"
         exec sudo TARGET_USER="$TARGET_USER" TARGET_HOME="$TARGET_HOME" \
@@ -214,7 +215,7 @@ LEGION_URL=""
 if [ "$INSTALL_LEGION" -eq 1 ]; then
     LEGION_URL="$(asset_url "$LEGION_NAME")"
     if [ -z "$LEGION_URL" ]; then
-        die "no release asset named '$LEGION_NAME' found; re-run with --no-legion to install only $BIN_NAME"
+        die "no release asset named '$LEGION_NAME' found; re-run without --legion to install only $BIN_NAME"
     fi
 fi
 
@@ -346,5 +347,5 @@ if [ "$INSTALL_LEGION" -eq 1 ]; then
     info "$LEGION_NAME installed at $BIN_DIR/$LEGION_NAME"
     info "Legion KVM is AGPL-3.0-only; source: $LEGION_REPO/tree/$LEGION_COMMIT"
 else
-    info "skipped $LEGION_NAME (--no-legion); -K reports that the legion binary is missing"
+    info "skipped $LEGION_NAME (pass --legion to install it); -K reports that the legion binary is missing"
 fi
